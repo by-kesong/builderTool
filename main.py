@@ -10,11 +10,18 @@ from app.theme import apply_theme
 def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    
+    # 实例化并获取配置主题
     win = MainWindow()
-    # 应用启动主题（默认深色，记忆上次选择）
     theme = win.cfg.get("theme", "dark")
     apply_theme(app, theme)
     win.current_theme = theme
+    
+    # 密码锁验证
+    from app.lock import verify_password
+    if not verify_password():
+        sys.exit(0)
+        
     win.show()
     sys.exit(app.exec_())
 

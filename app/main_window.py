@@ -325,9 +325,16 @@ class MainWindow(QMainWindow):
         w = QWidget()
         layout = QVBoxLayout(w)
 
-        # 顶部工具条：主题切换
+        # 顶部工具条：修改密码与主题切换
         topbar = QHBoxLayout()
         topbar.addStretch(1)
+        
+        self.pwd_btn = QPushButton("🔑 修改密码")
+        self.pwd_btn.setToolTip("修改软件的解锁密码")
+        self.pwd_btn.setFixedWidth(80)
+        self.pwd_btn.clicked.connect(self.change_unlock_password)
+        topbar.addWidget(self.pwd_btn)
+
         self.theme_btn = QPushButton("☾ 深色")
         self.theme_btn.setToolTip("切换深色 / 浅色主题")
         self.theme_btn.setFixedWidth(80)
@@ -679,6 +686,10 @@ class MainWindow(QMainWindow):
             self.build_process.waitForFinished(1000)
         super().closeEvent(event)
 
+    def change_unlock_password(self):
+        from .lock import change_unlock_password
+        change_unlock_password(self)
+
     def work_dir(self) -> str:
         return self.dir_combo.currentText().strip()
 
@@ -860,13 +871,15 @@ class MainWindow(QMainWindow):
         for name in projects:
             item = QListWidgetItem()
             item.setData(Qt.UserRole, name)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked)
             note = notes.get(name, "")
             item.setText(f"{name}    [{note}]" if note else name)
             if note:
                 item.setToolTip(note)
             self.project_list.addItem(item)
         self.project_list.blockSignals(False)
-        self.project_count_label.setText(f"项目列表 ({len(projects)})（右键可设置备注）")
+        self.project_count_label.setText(f"项目列表 ({len(projects)})（右键可快捷全选/设置备注）")
         self.log(f"共发现 {len(projects)} 个 git 项目")
         last = self.cfg.get("last_project", "")
         if last in projects:
@@ -877,41 +890,60 @@ class MainWindow(QMainWindow):
 
     def _project_menu(self, pos):
         item = self.project_list.itemAt(pos)
-        if not item:
-            return
-        name = item.data(Qt.UserRole)
-        notes = self.cfg.setdefault("project_notes", {})
         menu = QMenu(self)
-        act_open = menu.addAction("📂 打开当前目录")
-        act_note = menu.addAction("📝 设置/修改备注…")
-        act_clear = menu.addAction("❌ 清除备注")
-        act_clear.setEnabled(bool(notes.get(name)))
+        act_select_all = menu.addAction("☑ 全选所有项目")
+        act_deselect_all = menu.addAction("☐ 取消全选")
+        act_open = None
+        act_note = None
+        act_clear = None
+        
+        if item:
+            menu.addSeparator()
+            name = item.data(Qt.UserRole)
+            notes = self.cfg.setdefault("project_notes", {})
+            act_open = menu.addAction("📂 打开当前目录")
+            act_note = menu.addAction("📝 设置/修改备注…")
+            act_clear = menu.addAction("❌ 清除备注")
+            act_clear.setEnabled(bool(notes.get(name)))
+            
         action = menu.exec_(self.project_list.mapToGlobal(pos))
-        if action is act_open:
-            proj_path = os.path.join(self.work_dir(), name)
-            if os.path.exists(proj_path):
-                import os
-                try:
-                    os.startfile(proj_path)
-                except Exception as e:
-                    QMessageBox.warning(self, "错误", f"无法打开目录:\n{e}")
-            else:
-                QMessageBox.warning(self, "错误", f"该目录不存在:\n{proj_path}")
-        elif action is act_note:
-            text, ok = QInputDialog.getText(
-                self, "项目备注", f"为 [{name}] 设置备注：", text=notes.get(name, ""))
-            if ok:
-                text = text.strip()
-                if text:
-                    notes[name] = text
+        if not action:
+            return
+            
+        if action is act_select_all:
+            for i in range(self.project_list.count()):
+                self.project_list.item(i).setCheckState(Qt.Checked)
+        elif action is act_deselect_all:
+            for i in range(self.project_list.count()):
+                self.project_list.item(i).setCheckState(Qt.Unchecked)
+        elif item:
+            name = item.data(Qt.UserRole)
+            notes = self.cfg.setdefault("project_notes", {})
+            if action is act_open:
+                proj_path = os.path.join(self.work_dir(), name)
+                if os.path.exists(proj_path):
+                    import os
+                    try:
+                        os.startfile(proj_path)
+                    except Exception as e:
+                        QMessageBox.warning(self, "错误", f"无法打开目录:\n{e}")
                 else:
-                    notes.pop(name, None)
+                    QMessageBox.warning(self, "错误", f"该目录不存在:\n{proj_path}")
+            elif action is act_note:
+                text, ok = QInputDialog.getText(
+                    self, "项目备注", f"为 [{name}] 设置备注：", text=notes.get(name, ""))
+                if ok:
+                    text = text.strip()
+                    if text:
+                        notes[name] = text
+                    else:
+                        notes.pop(name, None)
+                    self._apply_note_to_item(item, name)
+                    cfg_mod.save_config(self.cfg)
+            elif action is act_clear:
+                notes.pop(name, None)
                 self._apply_note_to_item(item, name)
                 cfg_mod.save_config(self.cfg)
-        elif action is act_clear:
-            notes.pop(name, None)
-            self._apply_note_to_item(item, name)
-            cfg_mod.save_config(self.cfg)
 
     def _apply_note_to_item(self, item, name: str):
         note = self.cfg.get("project_notes", {}).get(name, "")
@@ -1291,8 +1323,16 @@ class MainWindow(QMainWindow):
             kind, r, files = result
             if kind == "error":
                 self.log_result(r)
+                # 恢复原分支选择展示
+                orig = self.current_branch_text()
+                if orig:
+                    self.branch_combo.setCurrentText(orig)
             elif kind == "dirty":
                 self.log(f"切换被阻止：存在 {len(files)} 个未提交修改", self.LOG_COLORS["err"])
+                # 恢复原分支选择展示
+                orig = self.current_branch_text()
+                if orig:
+                    self.branch_combo.setCurrentText(orig)
                 QMessageBox.warning(
                     self, "有未提交代码",
                     "当前分支存在未提交的修改，请先 commit 或处理后再切换：\n\n"
@@ -1304,6 +1344,11 @@ class MainWindow(QMainWindow):
                     self.cur_branch_label.setText(f"当前分支：{target}")
                     self.log_divider(f"{self.selected_project()} @ {target}")
                     self.log(f"已切换到分支：{target}", self.LOG_COLORS["ok"])
+                else:
+                    # 恢复原分支选择展示
+                    orig = self.current_branch_text()
+                    if orig:
+                        self.branch_combo.setCurrentText(orig)
 
         self.run_async(check_and_checkout, done, busy_msg="正在切换分支…")
 
@@ -1378,6 +1423,17 @@ class MainWindow(QMainWindow):
         target     = branch_picker.currentText().strip()
         del_local  = r_local.isChecked() or r_both.isChecked()
         del_remote = r_remote.isChecked() or r_both.isChecked()
+
+        if del_remote:
+            reply = QMessageBox.warning(
+                self,
+                "安全二次确认",
+                f"🚨 警告：您正在请求删除远端分支！\n\n项目：{self.selected_project()}\n分支：origin/{target}\n\n该操作将永久从远程仓库移除该分支，可能影响团队内其他开发人员，且无法直接撤销。是否确认继续删除？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
 
         def do_delete():
             results = []
@@ -1833,73 +1889,57 @@ class MainWindow(QMainWindow):
         return None, None
 
     def build_project(self):
-        """打包项目功能，前置清理产物，然后异步执行打包命令"""
-        repo = self.require_project()
-        if not repo:
+        """打包项目功能，支持勾选多个项目进行批量并发打包"""
+        checked_paths = []
+        for i in range(self.project_list.count()):
+            item = self.project_list.item(i)
+            if item.checkState() == Qt.Checked:
+                name = item.data(Qt.UserRole)
+                proj_path = os.path.join(self.work_dir(), name)
+                checked_paths.append(proj_path)
+                
+        if not checked_paths:
+            selected = self.selected_project()
+            if selected:
+                proj_path = os.path.normpath(os.path.join(self.work_dir(), selected))
+                checked_paths.append(proj_path)
+                
+        # 检查是否已有后台运行的批量打包窗口
+        has_dialog = hasattr(self, "batch_build_dialog") and self.batch_build_dialog is not None
+        
+        if not checked_paths:
+            # 如果没有勾选任何东西，且主打包窗口当前有在后台运行，我们可以只重新打开显示它！
+            if has_dialog:
+                self.batch_build_dialog.show()
+                self.batch_build_dialog.raise_()
+                self.batch_build_dialog.activateWindow()
+                return
+            QMessageBox.warning(self, "提示", "请先在左侧项目列表中勾选需要打包的项目，或者点击高亮选中一个项目。")
             return
             
-        # 1. 检测 Vue 和 Node 版本
-        vue_ver, node_ver = self._detect_project_vue_and_node(repo)
-        if not vue_ver:
-            reply = QMessageBox.question(
-                self, "未检测到 Vue 版本",
-                "未能从 package.json 中检测到 Vue 版本。\n是否继续使用系统默认 Node 版本打包？",
-                QMessageBox.Yes | QMessageBox.No
-            )
-            if reply != QMessageBox.Yes:
-                return
-            node_ver = None
-            
-        # 2. 清理前置产物
-        import shutil
-        cleaned_paths = []
-        for path_rel in [r"dist\disk", r"dist.zip", r"disk"]:
-            full_path = os.path.join(repo, path_rel)
-            if os.path.exists(full_path):
-                try:
-                    if os.path.isdir(full_path):
-                        shutil.rmtree(full_path)
-                    else:
-                        os.remove(full_path)
-                    cleaned_paths.append(path_rel)
-                except Exception as e:
-                    self.log(f"清理 {path_rel} 失败: {e}", self.LOG_COLORS["err"])
-                    QMessageBox.warning(self, "清理失败", f"清理旧产物 {path_rel} 失败:\n{e}\n将尝试继续打包。")
-        if cleaned_paths:
-            self.log(f"已清理旧打包产物: {', '.join(cleaned_paths)}", self.LOG_COLORS["hint"])
-            
-        # 3. 开始异步打包
-        proj_name = os.path.basename(repo)
-        self.build_btn.setText("⏳ 打包中...")
-        self.setWindowTitle(f"[⏳ 正在打包 - {proj_name}] Git 多项目分支管理工具 - builderTool")
-        self.set_busy(True, f"正在打包项目：{proj_name}…")
-        
-        self.build_process = QProcess(self)
-        self.build_process.setWorkingDirectory(repo)
-        self.build_process.setProcessChannelMode(QProcess.MergedChannels)
-        
-        # 构建并设置专属的 Node.js 进程环境变量 (避免调用 nvm.exe 弹窗和权限问题)
-        env = QProcessEnvironment.systemEnvironment()
-        if node_ver:
-            nvm_home = os.environ.get("NVM_HOME", r"C:\Users\Administrator\AppData\Roaming\nvm")
-            node_dir = os.path.join(nvm_home, f"v{node_ver}")
-            if os.path.exists(node_dir):
-                # 将对应的 Node 目录前置到 PATH 变量中
-                current_path = env.value("PATH")
-                env.insert("PATH", f"{node_dir};{current_path}")
-                self.build_process.setProcessEnvironment(env)
-                self.log(f"已指定局部 Node 路径: {node_dir}", self.LOG_COLORS["hint"])
-            else:
-                self.log(f"警告：未找到 Node {node_ver} 对应的目录: {node_dir}，将回退至系统默认 Node", self.LOG_COLORS["err"])
+        # 如果已经存在运行中的打包窗口
+        if has_dialog:
+            try:
+                # 检查是否有任何任务在运行或排队中
+                any_building = any(t["status"] in ("building", "pending") for t in self.batch_build_dialog.tasks.values())
+                if any_building:
+                    # 如果有任务在运行，则追加新勾选的任务，并唤醒显示
+                    self.batch_build_dialog.append_projects(checked_paths)
+                    self.batch_build_dialog.show()
+                    self.batch_build_dialog.raise_()
+                    self.batch_build_dialog.activateWindow()
+                    return
+                else:
+                    # 如果以前的都完成了/终止了，直接安全关闭旧窗口，以便开启新的批量打包
+                    self.batch_build_dialog.close_and_terminate()
+                    self.batch_build_dialog = None
+            except Exception:
+                self.batch_build_dialog = None
                 
-        self.build_process.readyReadStandardOutput.connect(self._on_build_output)
-        self.build_process.finished.connect(self._on_build_finished)
-        
-        cmd = "npm run build"
-        self.log(f"开始打包项目，执行命令: {cmd}", self.LOG_COLORS["cmd"])
-        # 在 Windows 下运行 cmd.exe /c "npm run build"
-        self.build_process.start("cmd.exe", ["/c", cmd])
-        self._build_project_path = repo
+        from .batch_build import BatchBuildDialog
+        # 创建非阻塞窗口并记录引用，避免生命周期提前结束或重复创建
+        self.batch_build_dialog = BatchBuildDialog(checked_paths, self)
+        self.batch_build_dialog.show()
 
     def _on_build_output(self):
         if hasattr(self, "build_process"):
@@ -1936,12 +1976,26 @@ class MainWindow(QMainWindow):
             path_url = QUrl.fromLocalFile(target_dir).toString()
             link_html = f'打包完成！输出路径: <a href="{path_url}" style="color: {self.LOG_COLORS["ok"]}; font-weight: bold;">{target_dir}</a> (点击一键直达)'
             self.log_html(link_html)
+            
+            # 闪烁任务栏与置顶弹窗提示
+            from PyQt5.QtWidgets import QApplication
+            QApplication.alert(self)
+            msg = QMessageBox(self)
+            msg.setWindowTitle("打包成功")
+            msg.setText(f"项目打包成功！\n\n路径: {target_dir}")
+            msg.setIcon(QMessageBox.Information)
+            msg.setWindowFlags(msg.windowFlags() | Qt.WindowStaysOnTopHint)
+            msg.exec_()
         else:
             self.log(f"打包失败，退出码: {exit_code}", self.LOG_COLORS["err"])
-            from PyQt5.QtCore import QTimer
-            QTimer.singleShot(100, lambda: QMessageBox.critical(
-                self, "打包失败", f"打包执行失败，退出码: {exit_code}\n详情见操作日志。"
-            ))
+            from PyQt5.QtWidgets import QApplication
+            QApplication.alert(self)
+            msg = QMessageBox(self)
+            msg.setWindowTitle("打包失败")
+            msg.setText(f"打包执行失败，退出码: {exit_code}\n详情见操作日志。")
+            msg.setIcon(QMessageBox.Critical)
+            msg.setWindowFlags(msg.windowFlags() | Qt.WindowStaysOnTopHint)
+            msg.exec_()
 
     def _on_log_link_clicked(self, url: QUrl):
         """处理日志内超链接点击事件，直接在资源管理器中打开对应目录，避免 QTextBrowser 内部导航导致内容清空"""
@@ -1965,3 +2019,24 @@ class MainWindow(QMainWindow):
         else:
             from PyQt5.QtGui import QDesktopServices
             QDesktopServices.openUrl(url)
+
+    def closeEvent(self, event):
+        """主窗口关闭时，强制释放/关闭后台的打包弹窗并终止其子进程"""
+        # 保存一些主要配置
+        self.cfg["last_old_ip"] = self.old_ip_edit.currentText().strip()
+        self.cfg["last_new_ip"] = self.new_ip_edit.text().strip()
+        cfg_mod.save_config(self.cfg)
+        
+        # 终止单体项目的打包进程（如果是旧式单体打包）
+        if hasattr(self, "build_process") and self.build_process.state() == QProcess.Running:
+            self.build_process.terminate()
+            self.build_process.waitForFinished(1000)
+            
+        # 关闭后台批量打包弹窗并强制终止其所有任务
+        if hasattr(self, "batch_build_dialog") and self.batch_build_dialog is not None:
+            try:
+                self.batch_build_dialog.close_and_terminate()
+            except Exception:
+                pass
+                
+        super().closeEvent(event)

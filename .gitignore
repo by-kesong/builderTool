@@ -7,3 +7,4 @@ nvm_out.txt
 .idea/
 .vscode/
 .gemini/
+.lock_config.json
