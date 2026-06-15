@@ -8,7 +8,8 @@ from PyQt5.QtWidgets import (
     QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
     QFrame, QGridLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
-    QPushButton, QRadioButton, QSplitter, QTextBrowser, QTextEdit, QToolButton, QVBoxLayout, QWidget,
+    QPushButton, QRadioButton, QSplitter, QTextBrowser, QTextEdit, QToolButton,
+    QVBoxLayout, QWidget, QStackedWidget, QTableWidget, QTableWidgetItem, QHeaderView,
 )
 
 from . import config as cfg_mod
@@ -313,13 +314,471 @@ class MainWindow(QMainWindow):
     # ---------------- UI 构建 ----------------
 
     def _build_ui(self):
-        splitter = QSplitter(Qt.Horizontal, self)
-        splitter.addWidget(self._build_left())
-        splitter.addWidget(self._build_right())
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 3)
-        self.setCentralWidget(splitter)
+        from PyQt5.QtWidgets import QStackedWidget, QTableWidget, QTableWidgetItem, QHeaderView
+        
+        self.stacked_widget = QStackedWidget(self)
+        
+        # 页面 0: Git 核心与打包
+        git_splitter = QSplitter(Qt.Horizontal, self)
+        git_splitter.addWidget(self._build_left())
+        git_splitter.addWidget(self._build_right())
+        git_splitter.setStretchFactor(0, 1)
+        git_splitter.setStretchFactor(1, 3)
+        self.stacked_widget.addWidget(git_splitter)
+        
+        # 页面 1: 教学部署版面
+        teach_panel = self._build_teach_panel()
+        self.stacked_widget.addWidget(teach_panel)
+        
+        # 主布局容器
+        container = QWidget()
+        main_layout = QVBoxLayout(container)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        
+        # 顶层扁平化导航栏
+        self.nav_frame = QFrame()
+        self.nav_frame.setObjectName("NavBarFrame")
+        self.nav_frame.setStyleSheet("""
+            QFrame#NavBarFrame {
+                border-bottom: 1px solid #3d3d3d;
+                background-color: #252526;
+            }
+        """)
+        nav_layout = QHBoxLayout(self.nav_frame)
+        nav_layout.setContentsMargins(15, 6, 15, 6)
+        nav_layout.setSpacing(10)
+        
+        self.logo_label = QLabel("🛠 builderTool")
+        self.logo_label.setStyleSheet("font-weight: bold; font-size: 15px; color: #ff9800; margin-right: 20px;")
+        nav_layout.addWidget(self.logo_label)
+        
+        # 切换按钮
+        self.btn_nav_git = QPushButton("📦 打包与分支管理")
+        self.btn_nav_git.setCheckable(True)
+        self.btn_nav_git.setChecked(True)
+        self.btn_nav_git.setFixedWidth(140)
+        self.btn_nav_git.setStyleSheet("""
+            QPushButton {
+                padding: 6px 12px;
+                font-weight: bold;
+                border: none;
+                border-radius: 4px;
+                color: #cccccc;
+                background-color: transparent;
+            }
+            QPushButton:hover {
+                background-color: #333333;
+                color: white;
+            }
+            QPushButton:checked {
+                background-color: #1769d6;
+                color: white;
+            }
+        """)
+        
+        self.btn_nav_teach = QPushButton("🏫 教学部署版面")
+        self.btn_nav_teach.setCheckable(True)
+        self.btn_nav_teach.setFixedWidth(140)
+        self.btn_nav_teach.setStyleSheet("""
+            QPushButton {
+                padding: 6px 12px;
+                font-weight: bold;
+                border: none;
+                border-radius: 4px;
+                color: #cccccc;
+                background-color: transparent;
+            }
+            QPushButton:hover {
+                background-color: #333333;
+                color: white;
+            }
+            QPushButton:checked {
+                background-color: #1769d6;
+                color: white;
+            }
+        """)
+        
+        self.nav_group = QButtonGroup(self)
+        self.nav_group.addButton(self.btn_nav_git)
+        self.nav_group.addButton(self.btn_nav_teach)
+        self.nav_group.setExclusive(True)
+        
+        self.btn_nav_git.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(0))
+        self.btn_nav_teach.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(1))
+        
+        nav_layout.addWidget(self.btn_nav_git)
+        nav_layout.addWidget(self.btn_nav_teach)
+        nav_layout.addStretch()
+        
+        main_layout.addWidget(self.nav_frame)
+        main_layout.addWidget(self.stacked_widget)
+        
+        self.setCentralWidget(container)
         self.statusBar().showMessage("就绪")
+
+    def _build_teach_panel(self) -> QWidget:
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(10)
+        
+        # 顶部的搜索与操作栏
+        top_bar = QHBoxLayout()
+        top_bar.setSpacing(10)
+        
+        search_label = QLabel("🔍 检索学校/备注：")
+        search_label.setStyleSheet("font-weight: bold;")
+        top_bar.addWidget(search_label)
+        
+        self.teach_search_input = QLineEdit()
+        self.teach_search_input.setPlaceholderText("输入关键字过滤列表...")
+        self.teach_search_input.textChanged.connect(self._filter_teach_table)
+        top_bar.addWidget(self.teach_search_input, 1)
+        
+        top_bar.addSpacing(20)
+        
+        # 录入/增删按钮
+        self.btn_teach_add = QPushButton("➕ 录入部署信息")
+        self.btn_teach_add.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; padding: 6px 12px; border: none; border-radius: 4px;")
+        self.btn_teach_add.clicked.connect(self._add_teach_row)
+        top_bar.addWidget(self.btn_teach_add)
+        
+        self.btn_teach_del = QPushButton("❌ 删除选中")
+        self.btn_teach_del.setStyleSheet("background-color: #c62828; color: white; font-weight: bold; padding: 6px 12px; border: none; border-radius: 4px;")
+        self.btn_teach_del.clicked.connect(self._delete_teach_row)
+        top_bar.addWidget(self.btn_teach_del)
+        
+        layout.addLayout(top_bar)
+        
+        # 表格控件
+        self.teach_table = QTableWidget()
+        self.teach_table.setColumnCount(5)
+        self.teach_table.setHorizontalHeaderLabels(["学校", "版本\\模式", "IP地址", "备注信息", "Base分支/版本"])
+        self.teach_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.teach_table.horizontalHeader().setStretchLastSection(True)
+        self.teach_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.teach_table.setSelectionMode(QTableWidget.SingleSelection)
+        
+        # 默认前两列与第三列分配固定宽度，备注自适应
+        self.teach_table.setColumnWidth(0, 240) # 学校
+        self.teach_table.setColumnWidth(1, 100) # 版本\模式
+        self.teach_table.setColumnWidth(2, 200) # IP地址
+        self.teach_table.setColumnWidth(4, 180) # Base分支/版本
+        
+        # 监听单元格变化实现实时保存
+        self.teach_table.itemChanged.connect(self._on_teach_cell_changed)
+        layout.addWidget(self.teach_table, 1)
+        
+        # 底部分页栏
+        bottom_bar = QHBoxLayout()
+        bottom_bar.setSpacing(10)
+        
+        self.teach_total_label = QLabel("共 0 条记录")
+        bottom_bar.addWidget(self.teach_total_label)
+        bottom_bar.addStretch()
+        
+        self.btn_teach_prev = QPushButton("◀ 上一页")
+        self.btn_teach_prev.clicked.connect(self._teach_prev_page)
+        bottom_bar.addWidget(self.btn_teach_prev)
+        
+        self.teach_page_label = QLabel("第 1 / 1 页")
+        self.teach_page_label.setStyleSheet("font-weight: bold; margin: 0 10px;")
+        bottom_bar.addWidget(self.teach_page_label)
+        
+        self.btn_teach_next = QPushButton("下一页 ▶")
+        self.btn_teach_next.clicked.connect(self._teach_next_page)
+        bottom_bar.addWidget(self.btn_teach_next)
+        
+        bottom_bar.addSpacing(15)
+        
+        self.teach_page_size_combo = QComboBox()
+        self.teach_page_size_combo.addItems(["10条/页", "20条/页", "50条/页"])
+        self.teach_page_size_combo.currentIndexChanged.connect(self._teach_page_size_changed)
+        bottom_bar.addWidget(self.teach_page_size_combo)
+        
+        layout.addLayout(bottom_bar)
+        
+        # 初始化分页状态
+        self.teach_current_page = 1
+        self.teach_page_size = 10
+        self.teach_data = []
+        
+        self._load_teach_data()
+        self._apply_teach_table_style()
+        self._render_teach_table()
+        
+        return w
+
+    def _load_teach_data(self):
+        # 检查配置中是否存在 teach_deployments，若无则初始化预置数据
+        if "teach_deployments" not in self.cfg or not self.cfg["teach_deployments"]:
+            self.cfg["teach_deployments"] = [
+                {
+                    "school": "郑州信息科技职业学院",
+                    "version": "新版",
+                    "ip": "10.1.13.55",
+                    "remark": "",
+                    "base": "(完整本地化)"
+                },
+                {
+                    "school": "黄山学院",
+                    "version": "旧版",
+                    "ip": "192.168.65.235",
+                    "remark": "按照本地化（无网络环境下）处理",
+                    "base": ""
+                },
+                {
+                    "school": "湖南女子",
+                    "version": "旧版",
+                    "ip": "172.19.110.102",
+                    "remark": "海鳗云旅游大数据平台大屏",
+                    "base": "黄山学院"
+                },
+                {
+                    "school": "成都-信管学院",
+                    "version": "",
+                    "ip": "172.16.10.52",
+                    "remark": "自定义（只有3个大屏）",
+                    "base": ""
+                },
+                {
+                    "school": "成都-旅游学院",
+                    "version": "",
+                    "ip": "172.16.10.51",
+                    "remark": "",
+                    "base": ""
+                },
+                {
+                    "school": "吉林电子",
+                    "version": "",
+                    "ip": "https://jltc-edu.haimanyun.com",
+                    "remark": "特殊处理的自定义大屏",
+                    "base": ""
+                },
+                {
+                    "school": "吉林外国语大学 +（新版舆情+新版满意度）",
+                    "version": "新版",
+                    "ip": "192.168.137.117 改成: 192.168.2.108",
+                    "remark": "当前版本可以作为 完全本地化的 范例；切记改新版舆情的时候，一定要注意是否是本地化请求的哦。找分支: eduLocal-吉林外国语大学-20260311(base郑职-案例)",
+                    "base": "郑州职业学院"
+                },
+                {
+                    "school": "三峡旅游",
+                    "version": "",
+                    "ip": "10.6.62.2",
+                    "remark": "",
+                    "base": ""
+                },
+                {
+                    "school": "吉林农大",
+                    "version": "新版-t1",
+                    "ip": "10.51.0.205",
+                    "remark": "过程很丝滑!",
+                    "base": "吉林外国语大学"
+                }
+            ]
+            cfg_mod.save_config(self.cfg)
+        
+        self.teach_data = list(self.cfg["teach_deployments"])
+
+    def _apply_teach_table_style(self):
+        theme = getattr(self, "current_theme", "dark")
+        if theme == "light":
+            self.teach_table.setStyleSheet("""
+                QTableWidget {
+                    background-color: #ffffff;
+                    gridline-color: #e0e0e0;
+                    color: #333333;
+                    border: 1px solid #e0e0e0;
+                }
+                QTableWidget::item {
+                    padding: 6px;
+                }
+                QHeaderView::section {
+                    background-color: #f5f5f5;
+                    color: #333333;
+                    padding: 6px;
+                    border: 1px solid #e0e0e0;
+                    font-weight: bold;
+                }
+                QTableWidget::item:selected {
+                    background-color: #1769d6;
+                    color: white;
+                }
+            """)
+        else:
+            self.teach_table.setStyleSheet("""
+                QTableWidget {
+                    background-color: #1e1e1e;
+                    gridline-color: #3d3d3d;
+                    color: #e0e0e0;
+                    border: 1px solid #3d3d3d;
+                }
+                QTableWidget::item {
+                    padding: 6px;
+                }
+                QHeaderView::section {
+                    background-color: #2d2d2d;
+                    color: #e0e0e0;
+                    padding: 6px;
+                    border: 1px solid #3d3d3d;
+                    font-weight: bold;
+                }
+                QTableWidget::item:selected {
+                    background-color: #1769d6;
+                    color: white;
+                }
+            """)
+
+    def _render_teach_table(self):
+        self.teach_table.blockSignals(True)
+        
+        total_items = len(self.teach_data)
+        self.teach_total_label.setText(f"共 {total_items} 条记录")
+        
+        total_pages = max(1, (total_items + self.teach_page_size - 1) // self.teach_page_size)
+        if self.teach_current_page > total_pages:
+            self.teach_current_page = total_pages
+        if self.teach_current_page < 1:
+            self.teach_current_page = 1
+            
+        self.teach_page_label.setText(f"第 {self.teach_current_page} / {total_pages} 页")
+        self.btn_teach_prev.setEnabled(self.teach_current_page > 1)
+        self.btn_teach_next.setEnabled(self.teach_current_page < total_pages)
+        
+        start_idx = (self.teach_current_page - 1) * self.teach_page_size
+        end_idx = min(start_idx + self.teach_page_size, total_items)
+        page_items = self.teach_data[start_idx:end_idx]
+        
+        self.teach_table.setRowCount(len(page_items))
+        for row_idx, item in enumerate(page_items):
+            global_idx = start_idx + row_idx
+            
+            school_item = QTableWidgetItem(item.get("school", ""))
+            school_item.setData(Qt.UserRole, global_idx)
+            
+            version_item = QTableWidgetItem(item.get("version", ""))
+            ip_item = QTableWidgetItem(item.get("ip", ""))
+            
+            remark_item = QTableWidgetItem(item.get("remark", ""))
+            remark_item.setToolTip(item.get("remark", ""))
+            
+            base_item = QTableWidgetItem(item.get("base", ""))
+            
+            self.teach_table.setItem(row_idx, 0, school_item)
+            self.teach_table.setItem(row_idx, 1, version_item)
+            self.teach_table.setItem(row_idx, 2, ip_item)
+            self.teach_table.setItem(row_idx, 3, remark_item)
+            self.teach_table.setItem(row_idx, 4, base_item)
+            
+        self.teach_table.blockSignals(False)
+
+    def _filter_teach_table(self):
+        query = self.teach_search_input.text().strip().lower()
+        all_items = self.cfg.get("teach_deployments", [])
+        if not query:
+            self.teach_data = list(all_items)
+        else:
+            self.teach_data = [
+                d for d in all_items
+                if query in d.get("school", "").lower() 
+                or query in d.get("version", "").lower() 
+                or query in d.get("ip", "").lower() 
+                or query in d.get("remark", "").lower() 
+                or query in d.get("base", "").lower()
+            ]
+        self.teach_current_page = 1
+        self._render_teach_table()
+
+    def _add_teach_row(self):
+        new_item = {
+            "school": "双击修改学校名称",
+            "version": "",
+            "ip": "",
+            "remark": "",
+            "base": ""
+        }
+        self.cfg.setdefault("teach_deployments", []).insert(0, new_item)
+        cfg_mod.save_config(self.cfg)
+        
+        self._load_teach_data()
+        self.teach_search_input.clear()
+        self.teach_current_page = 1
+        self._render_teach_table()
+        
+        self.teach_table.setCurrentCell(0, 0)
+        self.teach_table.editItem(self.teach_table.item(0, 0))
+
+    def _delete_teach_row(self):
+        row = self.teach_table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "提示", "请先在表格中点击选中一行进行删除")
+            return
+            
+        school_item = self.teach_table.item(row, 0)
+        if not school_item:
+            return
+        global_idx = school_item.data(Qt.UserRole)
+        if global_idx is None or global_idx >= len(self.teach_data):
+            return
+            
+        target_item = self.teach_data[global_idx]
+        school_name = target_item.get("school", "未命名学校")
+        
+        if QMessageBox.question(
+            self, "确认删除", f"确定要删除学校 [{school_name}] 的部署记录吗？"
+        ) != QMessageBox.Yes:
+            return
+            
+        if target_item in self.cfg.get("teach_deployments", []):
+            self.cfg["teach_deployments"].remove(target_item)
+            cfg_mod.save_config(self.cfg)
+            
+        self.log(f"已删除学校部署记录：{school_name}", self.LOG_COLORS["hint"])
+        self._load_teach_data()
+        self._filter_teach_table()
+
+    def _on_teach_cell_changed(self, item: QTableWidgetItem):
+        row = item.row()
+        col = item.column()
+        school_item = self.teach_table.item(row, 0)
+        if not school_item:
+            return
+        global_idx = school_item.data(Qt.UserRole)
+        if global_idx is None or global_idx >= len(self.teach_data):
+            return
+            
+        target_item = self.teach_data[global_idx]
+        val = item.text().strip()
+        
+        keys = ["school", "version", "ip", "remark", "base"]
+        if col < len(keys):
+            target_item[keys[col]] = val
+            
+        if col == 3:
+            item.setToolTip(val)
+            
+        cfg_mod.save_config(self.cfg)
+
+    def _teach_prev_page(self):
+        if self.teach_current_page > 1:
+            self.teach_current_page -= 1
+            self._render_teach_table()
+
+    def _teach_next_page(self):
+        total_items = len(self.teach_data)
+        total_pages = max(1, (total_items + self.teach_page_size - 1) // self.teach_page_size)
+        if self.teach_current_page < total_pages:
+            self.teach_current_page += 1
+            self._render_teach_table()
+
+    def _teach_page_size_changed(self, idx: int):
+        sizes = [10, 20, 50]
+        if idx >= 0 and idx < len(sizes):
+            self.teach_page_size = sizes[idx]
+            self.teach_current_page = 1
+            self._render_teach_table()
 
     def _build_left(self) -> QWidget:
         w = QWidget()
@@ -998,6 +1457,8 @@ class MainWindow(QMainWindow):
         cfg_mod.save_config(self.cfg)
         self.theme_btn.setText("☀ 浅色" if new_theme == "light" else "☾ 深色")
         self._apply_log_colors()
+        if hasattr(self, "teach_table"):
+            self._apply_teach_table_style()
         # 旧日志用旧主题颜色写入，切换背景后颜色对比度失效，清空重来
         self.log_view.clear()
         label = "浅色" if new_theme == "light" else "深色"
