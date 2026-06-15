@@ -300,7 +300,7 @@ class BranchConfigDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Git 多项目分支管理工具 - builderTool")
+        self.setWindowTitle("Git 多项目分支管理工具 v1.1 - builderTool")
         self.resize(1180, 760)
 
         self.cfg = cfg_mod.load_config()
