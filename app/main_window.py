@@ -2,14 +2,15 @@
 import os
 from datetime import datetime
 
-from PyQt5.QtCore import Qt, QUrl, QProcess, QProcessEnvironment
-from PyQt5.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
+from PyQt5.QtCore import Qt, QUrl, QProcess, QProcessEnvironment, QDate
+from PyQt5.QtGui import QColor, QFont, QTextCharFormat, QTextCursor, QPixmap
 from PyQt5.QtWidgets import (
     QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
     QFrame, QGridLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
     QPushButton, QRadioButton, QSplitter, QTextBrowser, QTextEdit, QToolButton,
     QVBoxLayout, QWidget, QStackedWidget, QTableWidget, QTableWidgetItem, QHeaderView,
+    QDateEdit,
 )
 
 from . import config as cfg_mod
@@ -298,6 +299,358 @@ class BranchConfigDialog(QDialog):
                     chk.setChecked(True)
 
 
+class ImagePreviewDialog(QDialog):
+    def __init__(self, image_path, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("图片预览")
+        self.setMinimumSize(600, 450)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+        
+        self.label = QLabel()
+        self.label.setAlignment(Qt.AlignCenter)
+        
+        pixmap = QPixmap(image_path)
+        if pixmap.isNull():
+            self.label.setText("图片加载失败，请检查文件是否存在")
+            self.label.setStyleSheet("color: red; font-size: 14px;")
+        else:
+            scaled_pixmap = pixmap.scaled(800, 600, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.label.setPixmap(scaled_pixmap)
+            
+        layout.addWidget(self.label, 1)
+        
+        btn_box = QHBoxLayout()
+        btn_open_external = QPushButton("🌐 使用系统查看器打开")
+        btn_open_external.setStyleSheet("background-color: #1769d6; color: white; padding: 6px 12px; border: none; border-radius: 4px;")
+        btn_open_external.clicked.connect(lambda: self._open_external(image_path))
+        btn_box.addWidget(btn_open_external)
+        
+        btn_close = QPushButton("关闭")
+        btn_close.setStyleSheet("background-color: #333333; color: white; padding: 6px 12px; border: none; border-radius: 4px;")
+        btn_close.clicked.connect(self.accept)
+        btn_box.addWidget(btn_close)
+        
+        layout.addLayout(btn_box)
+
+    def _open_external(self, path):
+        import os
+        try:
+            os.startfile(os.path.abspath(path))
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"无法打开文件: {e}")
+
+
+class IpCellWidget(QWidget):
+    def __init__(self, ip_text, main_win, global_idx):
+        super().__init__()
+        self.main_win = main_win
+        self.global_idx = global_idx
+        
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(4)
+        
+        self.edit = QLineEdit(ip_text)
+        self.edit.setStyleSheet("""
+            QLineEdit {
+                border: none;
+                background-color: transparent;
+                color: inherit;
+                padding: 2px;
+            }
+            QLineEdit:focus {
+                border: 1px solid #1769d6;
+                background-color: rgba(23, 105, 214, 0.1);
+            }
+        """)
+        self.edit.editingFinished.connect(self.save_ip)
+        layout.addWidget(self.edit, 1)
+        
+        self.copy_btn = QPushButton("📋")
+        self.copy_btn.setToolTip("复制IP地址到剪贴板")
+        self.copy_btn.setFixedWidth(28)
+        self.copy_btn.setFixedHeight(24)
+        self.copy_btn.setStyleSheet("""
+            QPushButton {
+                border: none;
+                background-color: transparent;
+                border-radius: 3px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: rgba(128, 128, 128, 0.2);
+            }
+        """)
+        self.copy_btn.clicked.connect(self.copy_ip)
+        layout.addWidget(self.copy_btn)
+        
+    def copy_ip(self):
+        from PyQt5.QtWidgets import QApplication
+        clipboard = QApplication.clipboard()
+        clipboard.setText(self.edit.text().strip())
+        self.main_win.statusBar().showMessage("IP地址已复制到剪贴板", 2000)
+        self.main_win.log(f"已复制IP地址: {self.edit.text().strip()}", self.main_win.LOG_COLORS["hint"])
+        
+    def save_ip(self):
+        val = self.edit.text().strip()
+        if self.global_idx < len(self.main_win.teach_data):
+            self.main_win.teach_data[self.global_idx]["ip"] = val
+            cfg_mod.save_config(self.main_win.cfg)
+
+class ConfigTagsCellWidget(QWidget):
+    def __init__(self, note_str, main_win, parent=None):
+        super().__init__(parent)
+        self.note_str = note_str or ""
+        self.main_win = main_win
+        
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(6)
+        layout.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        
+        try:
+            with open("debug_tags.txt", "a", encoding="utf-8") as f:
+                f.write(f"note_str: {repr(self.note_str)}\n")
+                f.write(f"chanye: {repr(' 产业 ')} {[hex(ord(c)) for c in ' 产业 ']}\n")
+                f.write(f"shixun: {repr(' 实训 ')} {[hex(ord(c)) for c in ' 实训 ']}\n")
+        except Exception as e:
+            pass
+
+        
+        has_chanye = "产业（教学）" in self.note_str
+        has_shixun = "实训" in self.note_str
+        
+        theme = getattr(main_win, "current_theme", "dark")
+        
+        if not has_chanye and not has_shixun:
+            lbl_none = QLabel("—")
+            lbl_none.setStyleSheet("color: #777777;")
+            layout.addWidget(lbl_none)
+            return
+
+        if has_chanye:
+            lbl_chanye = QLabel(" 产业 ")
+            lbl_chanye.setToolTip("已选择模块：产业（教学）")
+            lbl_chanye.setAlignment(Qt.AlignCenter)
+            if theme == "light":
+                lbl_chanye.setStyleSheet("""
+                    QLabel {
+                        background-color: #e8f5e9;
+                        color: #2e7d32;
+                        border: 1px solid #c8e6c9;
+                        border-radius: 4px;
+                        font-weight: normal;
+                        font-size: 12px;
+                        padding: 3px 6px;
+                    }
+                """)
+            else:
+                lbl_chanye.setStyleSheet("""
+                    QLabel {
+                        background-color: #1b5e20;
+                        color: #c8e6c9;
+                        border: 1px solid #2e7d32;
+                        border-radius: 4px;
+                        font-weight: normal;
+                        font-size: 12px;
+                        padding: 3px 6px;
+                    }
+                """)
+            layout.addWidget(lbl_chanye)
+            
+        if has_shixun:
+            btn_shixun = QPushButton(" 实训 ")
+            btn_shixun.setCursor(Qt.PointingHandCursor)
+            btn_shixun.setToolTip("已选择模块：实训（大屏）。点击查看具体子模块…")
+            if theme == "light":
+                btn_shixun.setStyleSheet("""
+                    QPushButton {
+                        background-color: #e3f2fd;
+                        color: #1565c0;
+                        border: 1px solid #bbdefb;
+                        border-radius: 4px;
+                        font-weight: bold;
+                        font-size: 12px;
+                        padding: 3px 6px;
+                    }
+                    QPushButton:hover {
+                        background-color: #1565c0;
+                        color: white;
+                        border-color: #1565c0;
+                    }
+                """)
+            else:
+                btn_shixun.setStyleSheet("""
+                    QPushButton {
+                        background-color: #0d47a1;
+                        color: #bbdefb;
+                        border: 1px solid #1565c0;
+                        border-radius: 4px;
+                        font-weight: bold;
+                        font-size: 12px;
+                        padding: 3px 6px;
+                    }
+                    QPushButton:hover {
+                        background-color: #1565c0;
+                        color: white;
+                        border-color: #1565c0;
+                    }
+                """)
+            btn_shixun.clicked.connect(self._show_details)
+            layout.addWidget(btn_shixun)
+            
+    def _show_details(self):
+        shixun_detail = self.main_win._format_shixun_detail(self.note_str)
+        QMessageBox.information(self, "实训（大屏）配置详情", shixun_detail)
+
+
+
+class ImageCellWidget(QWidget):
+    def __init__(self, image_path, main_win, global_idx):
+        super().__init__()
+        self.image_path = image_path
+        self.main_win = main_win
+        self.global_idx = global_idx
+        
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(4)
+        
+        self.btn_upload = QPushButton("📤")
+        self.btn_upload.setToolTip("上传图片")
+        self.btn_upload.setFixedWidth(36)
+        self.btn_upload.setStyleSheet("""
+            QPushButton {
+                background-color: #333333;
+                color: #cccccc;
+                border: 1px solid #555555;
+                border-radius: 3px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #444444;
+                color: white;
+            }
+        """)
+        self.btn_upload.clicked.connect(self.upload_image)
+        layout.addWidget(self.btn_upload)
+        
+        self.btn_view = QPushButton("👁️")
+        self.btn_view.setToolTip("查看图片")
+        self.btn_view.setFixedWidth(36)
+        self.btn_view.setStyleSheet("""
+            QPushButton {
+                background-color: #2e7d32;
+                color: white;
+                border: none;
+                border-radius: 3px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #388e3c;
+            }
+            QPushButton:disabled {
+                background-color: #555555;
+                color: #888888;
+            }
+        """)
+        self.btn_view.setEnabled(bool(image_path))
+        self.btn_view.clicked.connect(self.view_image)
+        layout.addWidget(self.btn_view)
+        
+        self.btn_del = QPushButton("🗑️")
+        self.btn_del.setToolTip("清除图片")
+        self.btn_del.setFixedWidth(36)
+        self.btn_del.setStyleSheet("""
+            QPushButton {
+                background-color: #c62828;
+                color: white;
+                border: none;
+                border-radius: 3px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #d32f2f;
+            }
+            QPushButton:disabled {
+                background-color: #555555;
+                color: #888888;
+            }
+        """)
+        self.btn_del.setEnabled(bool(image_path))
+        self.btn_del.clicked.connect(self.delete_image)
+        layout.addWidget(self.btn_del)
+        
+        self.lbl_info = QLabel("已上传" if image_path else "未上传")
+        self.lbl_info.setStyleSheet("color: #4caf50; font-size: 11px;" if image_path else "color: #888888; font-size: 11px;")
+        layout.addWidget(self.lbl_info)
+        layout.addStretch()
+
+    def upload_image(self):
+        from PyQt5.QtWidgets import QFileDialog
+        import shutil
+        import os
+        import time
+        
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "选择部署图片", "", "图片文件 (*.png *.jpg *.jpeg *.gif *.bmp)"
+        )
+        if not file_path:
+            return
+            
+        # Create assets/teach_images folder in workspace
+        target_dir = os.path.join(self.main_win.work_dir(), "assets", "teach_images")
+        if not os.path.exists(target_dir):
+            try:
+                os.makedirs(target_dir)
+            except Exception as e:
+                # If workspace dir is invalid, use app directory
+                target_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "teach_images")
+                if not os.path.exists(target_dir):
+                    os.makedirs(target_dir)
+                    
+        ext = os.path.splitext(file_path)[1]
+        filename = f"img_{int(time.time())}{ext}"
+        dest_path = os.path.join(target_dir, filename)
+        
+        try:
+            shutil.copy(file_path, dest_path)
+            rel_path = os.path.relpath(dest_path, self.main_win.work_dir())
+            
+            # Update database
+            if self.global_idx < len(self.main_win.teach_data):
+                self.main_win.teach_data[self.global_idx]["image_path"] = rel_path
+                cfg_mod.save_config(self.main_win.cfg)
+                self.main_win.log(f"已上传图片: {rel_path}", self.main_win.LOG_COLORS["ok"])
+                
+                # Refresh table
+                self.main_win._render_teach_table()
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"图片保存失败: {e}")
+
+    def view_image(self):
+        import os
+        if not self.image_path:
+            return
+        # Locate the image file
+        full_path = os.path.join(self.main_win.work_dir(), self.image_path)
+        if not os.path.exists(full_path):
+            QMessageBox.warning(self, "警告", f"图片文件不存在: {self.image_path}")
+            return
+                
+        dlg = ImagePreviewDialog(full_path, self)
+        dlg.exec_()
+
+    def delete_image(self):
+        if self.global_idx < len(self.main_win.teach_data):
+            self.main_win.teach_data[self.global_idx]["image_path"] = ""
+            cfg_mod.save_config(self.main_win.cfg)
+            self.main_win.log("已清除部署图片")
+            self.main_win._render_teach_table()
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -318,15 +671,18 @@ class MainWindow(QMainWindow):
         
         self.stacked_widget = QStackedWidget(self)
         
-        # 页面 0: Git 核心与打包
+        left_widget = self._build_left()
+        self.right_widget = self._build_right()
+        
+        # Page 0: Git 核心与打包
         git_splitter = QSplitter(Qt.Horizontal, self)
-        git_splitter.addWidget(self._build_left())
-        git_splitter.addWidget(self._build_right())
+        git_splitter.addWidget(left_widget)
+        git_splitter.addWidget(self.right_widget)
         git_splitter.setStretchFactor(0, 1)
         git_splitter.setStretchFactor(1, 3)
         self.stacked_widget.addWidget(git_splitter)
         
-        # 页面 1: 教学部署版面
+        # Page 1: 教学部署版面
         teach_panel = self._build_teach_panel()
         self.stacked_widget.addWidget(teach_panel)
         
@@ -339,65 +695,19 @@ class MainWindow(QMainWindow):
         # 顶层扁平化导航栏
         self.nav_frame = QFrame()
         self.nav_frame.setObjectName("NavBarFrame")
-        self.nav_frame.setStyleSheet("""
-            QFrame#NavBarFrame {
-                border-bottom: 1px solid #3d3d3d;
-                background-color: #252526;
-            }
-        """)
         nav_layout = QHBoxLayout(self.nav_frame)
         nav_layout.setContentsMargins(15, 6, 15, 6)
         nav_layout.setSpacing(10)
-        
-        self.logo_label = QLabel("🛠 builderTool")
-        self.logo_label.setStyleSheet("font-weight: bold; font-size: 15px; color: #ff9800; margin-right: 20px;")
-        nav_layout.addWidget(self.logo_label)
         
         # 切换按钮
         self.btn_nav_git = QPushButton("📦 打包与分支管理")
         self.btn_nav_git.setCheckable(True)
         self.btn_nav_git.setChecked(True)
         self.btn_nav_git.setFixedWidth(140)
-        self.btn_nav_git.setStyleSheet("""
-            QPushButton {
-                padding: 6px 12px;
-                font-weight: bold;
-                border: none;
-                border-radius: 4px;
-                color: #cccccc;
-                background-color: transparent;
-            }
-            QPushButton:hover {
-                background-color: #333333;
-                color: white;
-            }
-            QPushButton:checked {
-                background-color: #1769d6;
-                color: white;
-            }
-        """)
         
         self.btn_nav_teach = QPushButton("🏫 教学部署版面")
         self.btn_nav_teach.setCheckable(True)
         self.btn_nav_teach.setFixedWidth(140)
-        self.btn_nav_teach.setStyleSheet("""
-            QPushButton {
-                padding: 6px 12px;
-                font-weight: bold;
-                border: none;
-                border-radius: 4px;
-                color: #cccccc;
-                background-color: transparent;
-            }
-            QPushButton:hover {
-                background-color: #333333;
-                color: white;
-            }
-            QPushButton:checked {
-                background-color: #1769d6;
-                color: white;
-            }
-        """)
         
         self.nav_group = QButtonGroup(self)
         self.nav_group.addButton(self.btn_nav_git)
@@ -411,10 +721,28 @@ class MainWindow(QMainWindow):
         nav_layout.addWidget(self.btn_nav_teach)
         nav_layout.addStretch()
         
+        # 全局修改密码按钮
+        self.pwd_btn = QPushButton("🔑 修改密码")
+        self.pwd_btn.setToolTip("修改软件的解锁密码")
+        self.pwd_btn.setFixedWidth(90)
+        self.pwd_btn.clicked.connect(self.change_unlock_password)
+        nav_layout.addWidget(self.pwd_btn)
+        
+        # 全局主题切换按钮
+        initial_theme = self.cfg.get("theme", "dark")
+        self.theme_btn = QPushButton("☀ 浅色" if initial_theme == "light" else "☾ 深色")
+        self.theme_btn.setToolTip("切换深色 / 浅色主题")
+        self.theme_btn.setFixedWidth(80)
+        self.theme_btn.clicked.connect(self.toggle_theme)
+        nav_layout.addWidget(self.theme_btn)
+        
         main_layout.addWidget(self.nav_frame)
         main_layout.addWidget(self.stacked_widget)
         
         self.setCentralWidget(container)
+        
+        # 应用导航栏主题样式
+        self._apply_nav_style()
         self.statusBar().showMessage("就绪")
 
     def _build_teach_panel(self) -> QWidget:
@@ -438,7 +766,7 @@ class MainWindow(QMainWindow):
         
         top_bar.addSpacing(20)
         
-        # 录入/增删按钮
+        # 录入/增删/批量打包按钮
         self.btn_teach_add = QPushButton("➕ 录入部署信息")
         self.btn_teach_add.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; padding: 6px 12px; border: none; border-radius: 4px;")
         self.btn_teach_add.clicked.connect(self._add_teach_row)
@@ -449,25 +777,39 @@ class MainWindow(QMainWindow):
         self.btn_teach_del.clicked.connect(self._delete_teach_row)
         top_bar.addWidget(self.btn_teach_del)
         
+        self.btn_teach_build = QPushButton("📦 批量打包")
+        self.btn_teach_build.setToolTip("将根据左侧勾选的项目进行批量打包")
+        self.btn_teach_build.setStyleSheet("background-color: #1769d6; color: white; font-weight: bold; padding: 6px 12px; border: none; border-radius: 4px;")
+        self.btn_teach_build.clicked.connect(self.build_project)
+        top_bar.addWidget(self.btn_teach_build)
+        
         layout.addLayout(top_bar)
         
         # 表格控件
         self.teach_table = QTableWidget()
-        self.teach_table.setColumnCount(5)
-        self.teach_table.setHorizontalHeaderLabels(["学校", "版本\\模式", "IP地址", "备注信息", "Base分支/版本"])
+        self.teach_table.setColumnCount(8)
+        self.teach_table.setHorizontalHeaderLabels(["学校", "版本\\模式", "配置模块", "IP地址", "录入日期", "图片", "备注信息", "Base分支/版本"])
         self.teach_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.teach_table.horizontalHeader().setStretchLastSection(True)
         self.teach_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.teach_table.setSelectionMode(QTableWidget.SingleSelection)
         
-        # 默认前两列与第三列分配固定宽度，备注自适应
-        self.teach_table.setColumnWidth(0, 240) # 学校
+        # 设置列宽度，高亮配置模块列
+        self.teach_table.setColumnWidth(0, 200) # 学校
         self.teach_table.setColumnWidth(1, 100) # 版本\模式
-        self.teach_table.setColumnWidth(2, 200) # IP地址
-        self.teach_table.setColumnWidth(4, 180) # Base分支/版本
+        self.teach_table.setColumnWidth(2, 180) # 配置模块
+        self.teach_table.setColumnWidth(3, 140) # IP地址
+        self.teach_table.setColumnWidth(4, 115) # 录入日期
+        self.teach_table.setColumnWidth(5, 180) # 图片
+        self.teach_table.setColumnWidth(6, 200) # 备注信息
+        self.teach_table.setColumnWidth(7, 150) # Base分支/版本
         
-        # 监听单元格变化实现实时保存
+        # 设置默认行高以防单元格自定义控件被裁剪
+        self.teach_table.verticalHeader().setDefaultSectionSize(42)
+        
+        # 监听单元格变化与双击事件
         self.teach_table.itemChanged.connect(self._on_teach_cell_changed)
+        self.teach_table.cellDoubleClicked.connect(self._on_teach_cell_double_clicked)
         layout.addWidget(self.teach_table, 1)
         
         # 底部分页栏
@@ -518,6 +860,8 @@ class MainWindow(QMainWindow):
                     "school": "郑州信息科技职业学院",
                     "version": "新版",
                     "ip": "10.1.13.55",
+                    "date": "2026-06-11",
+                    "image_path": "",
                     "remark": "",
                     "base": "(完整本地化)"
                 },
@@ -525,6 +869,8 @@ class MainWindow(QMainWindow):
                     "school": "黄山学院",
                     "version": "旧版",
                     "ip": "192.168.65.235",
+                    "date": "2026-06-11",
+                    "image_path": "",
                     "remark": "按照本地化（无网络环境下）处理",
                     "base": ""
                 },
@@ -532,6 +878,8 @@ class MainWindow(QMainWindow):
                     "school": "湖南女子",
                     "version": "旧版",
                     "ip": "172.19.110.102",
+                    "date": "2026-06-11",
+                    "image_path": "",
                     "remark": "海鳗云旅游大数据平台大屏",
                     "base": "黄山学院"
                 },
@@ -539,6 +887,8 @@ class MainWindow(QMainWindow):
                     "school": "成都-信管学院",
                     "version": "",
                     "ip": "172.16.10.52",
+                    "date": "2026-06-11",
+                    "image_path": "",
                     "remark": "自定义（只有3个大屏）",
                     "base": ""
                 },
@@ -546,6 +896,8 @@ class MainWindow(QMainWindow):
                     "school": "成都-旅游学院",
                     "version": "",
                     "ip": "172.16.10.51",
+                    "date": "2026-06-11",
+                    "image_path": "",
                     "remark": "",
                     "base": ""
                 },
@@ -553,6 +905,8 @@ class MainWindow(QMainWindow):
                     "school": "吉林电子",
                     "version": "",
                     "ip": "https://jltc-edu.haimanyun.com",
+                    "date": "2026-06-11",
+                    "image_path": "",
                     "remark": "特殊处理的自定义大屏",
                     "base": ""
                 },
@@ -560,6 +914,8 @@ class MainWindow(QMainWindow):
                     "school": "吉林外国语大学 +（新版舆情+新版满意度）",
                     "version": "新版",
                     "ip": "192.168.137.117 改成: 192.168.2.108",
+                    "date": "2026-06-11",
+                    "image_path": "",
                     "remark": "当前版本可以作为 完全本地化的 范例；切记改新版舆情的时候，一定要注意是否是本地化请求的哦。找分支: eduLocal-吉林外国语大学-20260311(base郑职-案例)",
                     "base": "郑州职业学院"
                 },
@@ -567,17 +923,33 @@ class MainWindow(QMainWindow):
                     "school": "三峡旅游",
                     "version": "",
                     "ip": "10.6.62.2",
+                    "date": "2026-06-11",
+                    "image_path": "",
                     "remark": "",
                     "base": ""
                 },
                 {
                     "school": "吉林农大",
-                    "version": "新版-t1",
+                    "version": "新版",
                     "ip": "10.51.0.205",
+                    "date": "2026-06-11",
+                    "image_path": "",
                     "remark": "过程很丝滑!",
                     "base": "吉林外国语大学"
                 }
             ]
+            cfg_mod.save_config(self.cfg)
+        
+        # 兼容性迁移：确保每个项都包含 date 和 image_path
+        changed = False
+        for item in self.cfg.get("teach_deployments", []):
+            if "date" not in item:
+                item["date"] = "2026-06-11"
+                changed = True
+            if "image_path" not in item:
+                item["image_path"] = ""
+                changed = True
+        if changed:
             cfg_mod.save_config(self.cfg)
         
         self.teach_data = list(self.cfg["teach_deployments"])
@@ -606,6 +978,16 @@ class MainWindow(QMainWindow):
                     background-color: #1769d6;
                     color: white;
                 }
+                QComboBox, QDateEdit {
+                    background-color: #ffffff;
+                    color: #333333;
+                    border: 1px solid #cccccc;
+                    border-radius: 3px;
+                    padding: 2px;
+                }
+                QComboBox::drop-down, QDateEdit::drop-down {
+                    border: none;
+                }
             """)
         else:
             self.teach_table.setStyleSheet("""
@@ -629,7 +1011,103 @@ class MainWindow(QMainWindow):
                     background-color: #1769d6;
                     color: white;
                 }
+                QComboBox, QDateEdit {
+                    background-color: #2d2d2d;
+                    color: #e0e0e0;
+                    border: 1px solid #555555;
+                    border-radius: 3px;
+                    padding: 2px;
+                }
             """)
+
+    def _apply_nav_style(self):
+        theme = getattr(self, "current_theme", "dark")
+        if theme == "light":
+            self.nav_frame.setStyleSheet("""
+                QFrame#NavBarFrame {
+                    border-bottom: 1px solid #e0e0e0;
+                    background-color: #f5f5f5;
+                }
+            """)
+            btn_style = """
+                QPushButton {
+                    padding: 6px 12px;
+                    font-weight: bold;
+                    border: none;
+                    border-radius: 4px;
+                    color: #333333;
+                    background-color: transparent;
+                }
+                QPushButton:hover {
+                    background-color: #e0e0e0;
+                    color: black;
+                }
+                QPushButton:checked {
+                    background-color: #1769d6;
+                    color: white;
+                }
+            """
+            self.btn_nav_git.setStyleSheet(btn_style)
+            self.btn_nav_teach.setStyleSheet(btn_style)
+            
+            tool_btn_style = """
+                QPushButton {
+                    padding: 6px 10px;
+                    border: 1px solid #cccccc;
+                    border-radius: 4px;
+                    color: #333333;
+                    background-color: #ffffff;
+                }
+                QPushButton:hover {
+                    background-color: #f0f0f0;
+                    color: black;
+                }
+            """
+            self.pwd_btn.setStyleSheet(tool_btn_style)
+            self.theme_btn.setStyleSheet(tool_btn_style)
+        else:
+            self.nav_frame.setStyleSheet("""
+                QFrame#NavBarFrame {
+                    border-bottom: 1px solid #3d3d3d;
+                    background-color: #252526;
+                }
+            """)
+            btn_style = """
+                QPushButton {
+                    padding: 6px 12px;
+                    font-weight: bold;
+                    border: none;
+                    border-radius: 4px;
+                    color: #cccccc;
+                    background-color: transparent;
+                }
+                QPushButton:hover {
+                    background-color: #333333;
+                    color: white;
+                }
+                QPushButton:checked {
+                    background-color: #1769d6;
+                    color: white;
+                }
+            """
+            self.btn_nav_git.setStyleSheet(btn_style)
+            self.btn_nav_teach.setStyleSheet(btn_style)
+            
+            tool_btn_style = """
+                QPushButton {
+                    padding: 6px 10px;
+                    border: 1px solid #555555;
+                    border-radius: 4px;
+                    color: #cccccc;
+                    background-color: #2d2d2d;
+                }
+                QPushButton:hover {
+                    background-color: #3a3a3a;
+                    color: white;
+                }
+            """
+            self.pwd_btn.setStyleSheet(tool_btn_style)
+            self.theme_btn.setStyleSheet(tool_btn_style)
 
     def _render_teach_table(self):
         self.teach_table.blockSignals(True)
@@ -655,24 +1133,73 @@ class MainWindow(QMainWindow):
         for row_idx, item in enumerate(page_items):
             global_idx = start_idx + row_idx
             
+            # School (Col 0)
             school_item = QTableWidgetItem(item.get("school", ""))
             school_item.setData(Qt.UserRole, global_idx)
+            self.teach_table.setItem(row_idx, 0, school_item)
             
-            version_item = QTableWidgetItem(item.get("version", ""))
-            ip_item = QTableWidgetItem(item.get("ip", ""))
+            # Version (Col 1) - Editable QComboBox
+            self.teach_table.setItem(row_idx, 1, QTableWidgetItem(""))
+            combo = QComboBox()
+            combo.addItems(["新版", "旧版"])
+            combo.setEditable(True)
+            combo.setCurrentText(item.get("version", ""))
+            combo.currentTextChanged.connect(lambda text, g_idx=global_idx: self._on_teach_combo_changed(g_idx, text))
+            self.teach_table.setCellWidget(row_idx, 1, combo)
             
+            # Config modules (Col 2)
+            self.teach_table.setItem(row_idx, 2, QTableWidgetItem(""))
+            config_note = item.get("config_note", "")
+            config_widget = ConfigTagsCellWidget(config_note, self)
+            self.teach_table.setCellWidget(row_idx, 2, config_widget)
+            
+            # IP Address (Col 3)
+            self.teach_table.setItem(row_idx, 3, QTableWidgetItem(""))
+            ip_widget = IpCellWidget(item.get("ip", ""), self, global_idx)
+            self.teach_table.setCellWidget(row_idx, 3, ip_widget)
+            
+            # Date (Col 4) - QDateEdit
+            self.teach_table.setItem(row_idx, 4, QTableWidgetItem(""))
+            date_edit = QDateEdit()
+            date_edit.setCalendarPopup(True)
+            date_edit.setDisplayFormat("yyyy-MM-dd")
+            date_str = item.get("date", "")
+            if date_str:
+                qdate = QDate.fromString(date_str, "yyyy-MM-dd")
+                if qdate.isValid():
+                    date_edit.setDate(qdate)
+                else:
+                    date_edit.setDate(QDate.currentDate())
+            else:
+                date_edit.setDate(QDate.currentDate())
+            date_edit.dateChanged.connect(lambda qd, g_idx=global_idx: self._on_teach_date_changed(g_idx, qd.toString("yyyy-MM-dd")))
+            self.teach_table.setCellWidget(row_idx, 4, date_edit)
+            
+            # Image (Col 5) - ImageCellWidget
+            self.teach_table.setItem(row_idx, 5, QTableWidgetItem(""))
+            img_widget = ImageCellWidget(item.get("image_path", ""), self, global_idx)
+            self.teach_table.setCellWidget(row_idx, 5, img_widget)
+            
+            # Remark (Col 6)
             remark_item = QTableWidgetItem(item.get("remark", ""))
             remark_item.setToolTip(item.get("remark", ""))
+            self.teach_table.setItem(row_idx, 6, remark_item)
             
+            # Base branch/version (Col 7)
             base_item = QTableWidgetItem(item.get("base", ""))
-            
-            self.teach_table.setItem(row_idx, 0, school_item)
-            self.teach_table.setItem(row_idx, 1, version_item)
-            self.teach_table.setItem(row_idx, 2, ip_item)
-            self.teach_table.setItem(row_idx, 3, remark_item)
-            self.teach_table.setItem(row_idx, 4, base_item)
+            self.teach_table.setItem(row_idx, 7, base_item)
             
         self.teach_table.blockSignals(False)
+
+    def _on_teach_combo_changed(self, global_idx, text):
+        if global_idx is not None and global_idx < len(self.teach_data):
+            self.teach_data[global_idx]["version"] = text.strip()
+            cfg_mod.save_config(self.cfg)
+
+    def _on_teach_date_changed(self, global_idx, date_str):
+        if global_idx is not None and global_idx < len(self.teach_data):
+            self.teach_data[global_idx]["date"] = date_str
+            cfg_mod.save_config(self.cfg)
 
     def _filter_teach_table(self):
         query = self.teach_search_input.text().strip().lower()
@@ -687,6 +1214,7 @@ class MainWindow(QMainWindow):
                 or query in d.get("ip", "").lower() 
                 or query in d.get("remark", "").lower() 
                 or query in d.get("base", "").lower()
+                or query in d.get("config_note", "").lower()
             ]
         self.teach_current_page = 1
         self._render_teach_table()
@@ -694,8 +1222,11 @@ class MainWindow(QMainWindow):
     def _add_teach_row(self):
         new_item = {
             "school": "双击修改学校名称",
-            "version": "",
+            "version": "新版",
+            "config_note": "",
             "ip": "",
+            "date": datetime.today().strftime("%Y-%m-%d"),
+            "image_path": "",
             "remark": "",
             "base": ""
         }
@@ -752,14 +1283,38 @@ class MainWindow(QMainWindow):
         target_item = self.teach_data[global_idx]
         val = item.text().strip()
         
-        keys = ["school", "version", "ip", "remark", "base"]
-        if col < len(keys):
-            target_item[keys[col]] = val
-            
-        if col == 3:
+        if col == 0:
+            target_item["school"] = val
+        elif col == 3:
+            target_item["ip"] = val
+        elif col == 6:
+            target_item["remark"] = val
             item.setToolTip(val)
+        elif col == 7:
+            target_item["base"] = val
             
         cfg_mod.save_config(self.cfg)
+        self.teach_current_page = 1
+        self._render_teach_table()
+
+    def _on_teach_cell_double_clicked(self, row, col):
+        if col == 2:
+            school_item = self.teach_table.item(row, 0)
+            if not school_item:
+                return
+            global_idx = school_item.data(Qt.UserRole)
+            if global_idx is None or global_idx >= len(self.teach_data):
+                return
+            target_item = self.teach_data[global_idx]
+            current_note = target_item.get("config_note", "")
+            
+            dlg = BranchConfigDialog(self, initial_note=current_note)
+            if dlg.exec_() == QDialog.Accepted:
+                new_note = dlg.get_note()
+                target_item["config_note"] = new_note
+                cfg_mod.save_config(self.cfg)
+                self._render_teach_table()
+                self.log(f"已更新学校 [{target_item.get('school')}] 的配置模块为: {new_note}", self.LOG_COLORS["ok"])
 
     def _teach_prev_page(self):
         if self.teach_current_page > 1:
@@ -783,23 +1338,6 @@ class MainWindow(QMainWindow):
     def _build_left(self) -> QWidget:
         w = QWidget()
         layout = QVBoxLayout(w)
-
-        # 顶部工具条：修改密码与主题切换
-        topbar = QHBoxLayout()
-        topbar.addStretch(1)
-        
-        self.pwd_btn = QPushButton("🔑 修改密码")
-        self.pwd_btn.setToolTip("修改软件的解锁密码")
-        self.pwd_btn.setFixedWidth(80)
-        self.pwd_btn.clicked.connect(self.change_unlock_password)
-        topbar.addWidget(self.pwd_btn)
-
-        self.theme_btn = QPushButton("☾ 深色")
-        self.theme_btn.setToolTip("切换深色 / 浅色主题")
-        self.theme_btn.setFixedWidth(80)
-        self.theme_btn.clicked.connect(self.toggle_theme)
-        topbar.addWidget(self.theme_btn)
-        layout.addLayout(topbar)
 
         layout.addWidget(QLabel("工作目录："))
         dir_row = QHBoxLayout()
@@ -1459,6 +1997,8 @@ class MainWindow(QMainWindow):
         self._apply_log_colors()
         if hasattr(self, "teach_table"):
             self._apply_teach_table_style()
+        if hasattr(self, "nav_frame"):
+            self._apply_nav_style()
         # 旧日志用旧主题颜色写入，切换背景后颜色对比度失效，清空重来
         self.log_view.clear()
         label = "浅色" if new_theme == "light" else "深色"
@@ -1626,13 +2166,27 @@ class MainWindow(QMainWindow):
             cfg_mod.add_branch_name(self.cfg, branch_name, new_note)
             cfg_mod.save_config(self.cfg)
             
+            # 同步更新教学部署列表中对应学校的配置模块
+            if branch_name.startswith("eduLocal-"):
+                school_name = self._extract_school_name(branch_name)
+                updated = False
+                for item in self.cfg.get("teach_deployments", []):
+                    if item.get("school") == school_name:
+                        item["config_note"] = new_note
+                        updated = True
+                        break
+                if updated:
+                    cfg_mod.save_config(self.cfg)
+                    self.teach_data = list(self.cfg["teach_deployments"])
+                    self._render_teach_table()
+            
             # 重新刷新当前分支的配置显示
             self._refresh_cur_branch_cfg(branch_name)
             
             # 同时刷新新建分支区域的配置下拉历史，以便保持最新的数据一致性
             self._refresh_branch_name_history()
             
-            self.log(f"已更新分支 [{branch_name}] 的配置", self.LOG_COLORS["ok"])
+            self.log(f"已更新分支 [{branch_name}] 的配置并同步至部署列表", self.LOG_COLORS["ok"])
 
     @staticmethod
     def _format_shixun_detail(note: str) -> str:
@@ -2120,6 +2674,16 @@ class MainWindow(QMainWindow):
 
         self.run_async(gather, done, busy_msg="正在读取修改状态…")
 
+    def _extract_school_name(self, branch_name: str) -> str:
+        if not branch_name:
+            return ""
+        if branch_name.startswith("eduLocal-"):
+            rest = branch_name[len("eduLocal-"):]
+            parts = rest.split("-")
+            if parts:
+                return parts[0]
+        return branch_name
+
     def create_branch(self):
         repo = self.require_project()
         if not repo:
@@ -2183,6 +2747,36 @@ class MainWindow(QMainWindow):
                     self.log(f"已创建并切换到新分支：{name}", self.LOG_COLORS["ok"])
                     if note:
                         self.log(f"备注：{note}", self.LOG_COLORS["hint"])
+                    
+                    # 自动创建部署信息记录
+                    school_name = self._extract_school_name(name)
+                    base_school = self._extract_school_name(base)
+                    from PyQt5.QtCore import QDate
+                    current_date = QDate.currentDate().toString("yyyy-MM-dd")
+                    
+                    if "teach_deployments" not in self.cfg:
+                        self.cfg["teach_deployments"] = []
+                        
+                    new_item = {
+                        "school": school_name,
+                        "version": "新版",
+                        "config_note": note,
+                        "ip": "",
+                        "date": current_date,
+                        "image_path": "",
+                        "remark": "暂无",
+                        "base": base_school
+                    }
+                    pre_ip = self.new_ip_edit.text().strip()
+                    if pre_ip:
+                        new_item["ip"] = pre_ip
+                    
+                    self.cfg["teach_deployments"].insert(0, new_item)
+                    cfg_mod.save_config(self.cfg)
+                    self.teach_data = list(self.cfg["teach_deployments"])
+                    self._render_teach_table()
+                    self.log(f"已自动在教学部署列表中新建记录：[{school_name}]", self.LOG_COLORS["ok"])
+                        
                     self.fetch_branches()
 
         self.run_async(create, done, busy_msg="正在创建分支…")
@@ -2255,6 +2849,22 @@ class MainWindow(QMainWindow):
             cfg_mod.add_ip_history(self.cfg, project, branch, old_ip, new_ip, file_count)
             cfg_mod.save_config(self.cfg)
             self._refresh_old_ip_options(project)
+            
+            # 检测是否是在新分支（以 eduLocal- 开头）下进行的 IP 替换，若是则自动同步更新教学部署列表中对应学校的 IP 地址
+            if branch.startswith("eduLocal-"):
+                school_name = self._extract_school_name(branch)
+                updated = False
+                for item in self.cfg.get("teach_deployments", []):
+                    if item.get("school") == school_name:
+                        item["ip"] = new_ip
+                        updated = True
+                        break
+                if updated:
+                    cfg_mod.save_config(self.cfg)
+                    self.teach_data = list(self.cfg["teach_deployments"])
+                    self._render_teach_table()
+                    self.log(f"检测到在新分支下执行IP替换，已自动将教学部署列表中 [{school_name}] 的 IP 地址更新为：{new_ip}", self.LOG_COLORS["ok"])
+            
             QMessageBox.information(self, "完成", f"已替换 {file_count} 个文件、{total} 处。\n可用 status/commit 查看并提交。")
 
         self.run_async(ip_replace.replace_ip, done, repo, old_ip, new_ip, busy_msg="正在替换…")
@@ -2282,6 +2892,7 @@ class MainWindow(QMainWindow):
         table.setHorizontalHeaderLabels(headers)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        table.verticalHeader().setDefaultSectionSize(36)
         v.addWidget(table, 1)
 
         def fill():
@@ -2360,25 +2971,11 @@ class MainWindow(QMainWindow):
                 checked_paths.append(proj_path)
                 
         if not checked_paths:
-            selected = self.selected_project()
-            if selected:
-                proj_path = os.path.normpath(os.path.join(self.work_dir(), selected))
-                checked_paths.append(proj_path)
-                
-        # 检查是否已有后台运行的批量打包窗口
-        has_dialog = hasattr(self, "batch_build_dialog") and self.batch_build_dialog is not None
-        
-        if not checked_paths:
-            # 如果没有勾选任何东西，且主打包窗口当前有在后台运行，我们可以只重新打开显示它！
-            if has_dialog:
-                self.batch_build_dialog.show()
-                self.batch_build_dialog.raise_()
-                self.batch_build_dialog.activateWindow()
-                return
-            QMessageBox.warning(self, "提示", "请先在左侧项目列表中勾选需要打包的项目，或者点击高亮选中一个项目。")
+            QMessageBox.warning(self, "提示", "请先在左侧项目列表中勾选需要打包的项目才可以启动打包。")
             return
             
         # 如果已经存在运行中的打包窗口
+        has_dialog = hasattr(self, "batch_build_dialog") and self.batch_build_dialog is not None
         if has_dialog:
             try:
                 # 检查是否有任何任务在运行或排队中

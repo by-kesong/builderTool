@@ -8,3 +8,4 @@ nvm_out.txt
 .vscode/
 .gemini/
 .lock_config.json
+*.txt
