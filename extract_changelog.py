@@ -22,8 +22,7 @@ def main():
         changelog = match.group(2).strip()
         with open("RELEASE_NOTES.md", "w", encoding="utf-8") as f:
             f.write(changelog)
-        print(f"Successfully extracted changelog for {tag} to RELEASE_NOTES.md:")
-        print(changelog)
+        print(f"Successfully extracted changelog for {tag} to RELEASE_NOTES.md")
     else:
         print(f"Could not find changelog section for {tag} in README.md")
         with open("RELEASE_NOTES.md", "w", encoding="utf-8") as f:
