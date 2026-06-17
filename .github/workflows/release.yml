@@ -40,10 +40,8 @@ jobs:
         run: |
           python extract_changelog.py "${{ github.ref_name }}"
 
-      - name: Create Release and Upload Asset
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/builderTool-*.exe
-          body_path: RELEASE_NOTES.md
+      - name: Create or Update Release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create ${{ github.ref_name }} dist/builderTool-${{ github.ref_name }}.exe --title "${{ github.ref_name }}" --notes-file RELEASE_NOTES.md --clobber
