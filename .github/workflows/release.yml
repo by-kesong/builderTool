@@ -36,10 +36,15 @@ jobs:
           # 将生成的 exe 备份并复制为带版本号的格式
           Copy-Item -Path .\dist\builderTool.exe -Destination .\dist\builderTool-${{ github.ref_name }}.exe -Force
 
+      - name: Extract Release Notes from README
+        shell: bash
+        run: |
+          python extract_changelog.py "${{ github.ref_name }}"
+
       - name: Create Release and Upload Asset
         uses: softprops/action-gh-release@v2
         with:
           files: dist/builderTool-*.exe
-          generate_release_notes: true
+          body_path: RELEASE_NOTES.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
