@@ -1,0 +1,45 @@
+name: Release App
+
+on:
+  push:
+    tags:
+      - 'v*' # 当推送以 v 开头的 tag 时触发，例如 v1.0.1, v1.0.2
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller -r requirements.txt
+
+      - name: Build EXE
+        run: |
+          pyinstaller builderTool.spec
+
+      - name: Rename EXE
+        shell: pwsh
+        run: |
+          # 将生成的 exe 备份并复制为带版本号的格式
+          Copy-Item -Path .\dist\builderTool.exe -Destination .\dist\builderTool-${{ github.ref_name }}.exe -Force
+
+      - name: Create Release and Upload Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/builderTool-*.exe
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
