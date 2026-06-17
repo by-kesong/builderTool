@@ -2,20 +2,144 @@
 import os
 from datetime import datetime
 
-from PyQt5.QtCore import Qt, QUrl, QProcess, QProcessEnvironment, QDate
+from PyQt5.QtCore import Qt, QUrl, QProcess, QProcessEnvironment, QDate, QMimeData
 from PyQt5.QtGui import QColor, QFont, QTextCharFormat, QTextCursor, QPixmap
 from PyQt5.QtWidgets import (
-    QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
-    QFrame, QGridLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
-    QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
-    QPushButton, QRadioButton, QSplitter, QTextBrowser, QTextEdit, QToolButton,
-    QVBoxLayout, QWidget, QStackedWidget, QTableWidget, QTableWidgetItem, QHeaderView,
-    QDateEdit,
+    QAbstractItemView, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+    QFileDialog, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel,
+    QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
+    QPlainTextEdit, QPushButton, QRadioButton, QSplitter, QTextBrowser, QTextEdit,
+    QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget, QStackedWidget,
+    QTableWidget, QTableWidgetItem, QHeaderView, QDateEdit,
 )
 
 from . import config as cfg_mod
 from . import git_ops, ip_replace
 from .worker import Worker
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 项目树控件：支持分组折叠 + 组内/跨组拖拽排序
+# ─────────────────────────────────────────────────────────────────────────────
+DEFAULT_GROUP = "未分组"
+_GROUP_ROLE   = Qt.UserRole + 10   # 标记节点是否为分组头
+
+
+class ProjectTreeWidget(QTreeWidget):
+    """替代 QListWidget 的项目分组树：
+    - 叶节点：Qt.UserRole = 项目名, checkable
+    - 根节点（分组头）：_GROUP_ROLE = True, 不可 check, 可折叠
+    - 支持组内/跨组拖拽重排
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setHeaderHidden(True)
+        self.setRootIsDecorated(True)
+        self.setIndentation(14)
+        self.setDragDropMode(QAbstractItemView.InternalMove)
+        self.setDefaultDropAction(Qt.MoveAction)
+        self.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.setExpandsOnDoubleClick(False)   # 双击留给外部选中项目
+        self.setStyleSheet("""
+            QTreeWidget { border: 1px solid #555; border-radius: 4px; }
+            QTreeWidget::item { padding: 4px 4px; }
+            QTreeWidget::item:hover { background: #1769d6; color: white; }
+            QTreeWidget::item:selected {
+                background: #1769d6;
+                color: white;
+                font-weight: bold;
+                border-left: 3px solid #ff9800;
+            }
+        """)
+
+    # ── 拖拽：只允许叶节点（项目）被拖拽，分组头不可拖 ──────────────────────
+    def startDrag(self, supportedActions):
+        item = self.currentItem()
+        if item and not item.data(0, _GROUP_ROLE):
+            super().startDrag(supportedActions)
+
+    def dropEvent(self, event):
+        target = self.itemAt(event.pos())
+        dragged = self.currentItem()
+        if not dragged or dragged.data(0, _GROUP_ROLE):
+            event.ignore()
+            return
+
+        # 确定目标分组根节点
+        if target is None:
+            dest_root = self.invisibleRootItem().child(self.invisibleRootItem().childCount() - 1)
+        elif target.data(0, _GROUP_ROLE):
+            dest_root = target
+        else:
+            dest_root = target.parent() or self.invisibleRootItem()
+
+        if dest_root is None:
+            event.ignore()
+            return
+
+        # 从原分组移除
+        src_root = dragged.parent() or self.invisibleRootItem()
+        src_root.removeChild(dragged)
+
+        # 插入目标分组
+        if target and not target.data(0, _GROUP_ROLE) and target.parent() == dest_root:
+            idx = dest_root.indexOfChild(target)
+            dest_root.insertChild(idx, dragged)
+        else:
+            dest_root.addChild(dragged)
+
+        dest_root.setExpanded(True)
+        self.setCurrentItem(dragged)
+        event.accept()
+
+    # ── 辅助：遍历所有叶节点（项目条目）────────────────────────────────────
+    def all_project_items(self):
+        """返回所有叶节点 QTreeWidgetItem 列表。"""
+        result = []
+        root = self.invisibleRootItem()
+        for gi in range(root.childCount()):
+            grp = root.child(gi)
+            for pi in range(grp.childCount()):
+                result.append(grp.child(pi))
+        return result
+
+    def find_or_create_group(self, group_name: str) -> QTreeWidgetItem:
+        """按名称找分组根节点，不存在则创建。"""
+        root = self.invisibleRootItem()
+        for i in range(root.childCount()):
+            g = root.child(i)
+            if g.text(0) == group_name:
+                return g
+        return self._create_group(group_name)
+
+    def _create_group(self, group_name: str) -> QTreeWidgetItem:
+        grp = QTreeWidgetItem(self)
+        grp.setText(0, group_name)
+        grp.setData(0, _GROUP_ROLE, True)
+        grp.setFlags(Qt.ItemIsEnabled)   # 分组头：不可选、不可 check
+        grp.setExpanded(True)
+        f = grp.font(0)
+        f.setBold(True)
+        grp.setFont(0, f)
+        return grp
+
+    def group_names(self) -> list:
+        root = self.invisibleRootItem()
+        return [root.child(i).text(0) for i in range(root.childCount())]
+
+    def dump_order(self) -> dict:
+        """导出当前分组结构 {group: [proj, ...]} 用于持久化。"""
+        result = {}
+        root = self.invisibleRootItem()
+        for gi in range(root.childCount()):
+            grp = root.child(gi)
+            name = grp.text(0)
+            result[name] = [
+                grp.child(pi).data(0, Qt.UserRole)
+                for pi in range(grp.childCount())
+            ]
+        return result
 
 
 class CommitDialog(QDialog):
@@ -1367,24 +1491,54 @@ class MainWindow(QMainWindow):
         btn_row.addWidget(self.clone_btn)
         layout.addLayout(btn_row)
 
-        self.project_count_label = QLabel("项目列表 (0)（右键可设置备注）")
+        self.project_count_label = QLabel("项目列表 (0)（右键可快捷全选/设置备注/管理分组）")
         layout.addWidget(self.project_count_label)
-        self.project_list = QListWidget()
-        self.project_list.setStyleSheet("""
-            QListWidget::item { padding: 5px 6px; }
-            QListWidget::item:hover { background: #1769d6; color: white; }
-            QListWidget::item:selected {
-                background: #1769d6;
-                color: white;
-                font-weight: bold;
-                border-left: 4px solid #ff9800;
-            }
-        """)
+
+        # 创建树控件
+        self.project_list = ProjectTreeWidget()
         self.project_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.project_list.customContextMenuRequested.connect(self._project_menu)
         self.project_list.itemSelectionChanged.connect(self._on_project_selected)
+        self.project_list.model().rowsMoved.connect(self._save_group_order)
         layout.addWidget(self.project_list, 1)
+
+        # 底部工具栏：展开/折叠 + 全选/取消全选
+        expand_row = QHBoxLayout()
+        expand_row.setContentsMargins(0, 2, 0, 0)
+        btn_style = (
+            "QPushButton{font-size:11px;padding:0 6px;border:1px solid #555;border-radius:3px;}"
+            "QPushButton:hover{background:#1769d6;color:white;border-color:#1769d6;}"
+        )
+        btn_expand_all = QPushButton("▶ 展开")
+        btn_expand_all.setFixedHeight(22)
+        btn_expand_all.setStyleSheet(btn_style)
+        btn_expand_all.clicked.connect(self.project_list.expandAll)
+        btn_collapse_all = QPushButton("▼ 折叠")
+        btn_collapse_all.setFixedHeight(22)
+        btn_collapse_all.setStyleSheet(btn_style)
+        btn_collapse_all.clicked.connect(self.project_list.collapseAll)
+        btn_check_all = QPushButton("☑ 全选")
+        btn_check_all.setFixedHeight(22)
+        btn_check_all.setStyleSheet(btn_style)
+        btn_check_all.clicked.connect(
+            lambda: [it.setCheckState(0, Qt.Checked)
+                     for it in self.project_list.all_project_items()])
+        btn_uncheck_all = QPushButton("☐ 取消")
+        btn_uncheck_all.setFixedHeight(22)
+        btn_uncheck_all.setStyleSheet(btn_style)
+        btn_uncheck_all.clicked.connect(
+            lambda: [it.setCheckState(0, Qt.Unchecked)
+                     for it in self.project_list.all_project_items()])
+        expand_row.addWidget(btn_expand_all)
+        expand_row.addWidget(btn_collapse_all)
+        expand_row.addSpacing(8)
+        expand_row.addWidget(btn_check_all)
+        expand_row.addWidget(btn_uncheck_all)
+        expand_row.addStretch(1)
+        layout.addLayout(expand_row)
         return w
+
+
 
     def _build_right(self) -> QWidget:
         w = QWidget()
@@ -1694,7 +1848,11 @@ class MainWindow(QMainWindow):
         items = self.project_list.selectedItems()
         if not items:
             return ""
-        return items[0].data(Qt.UserRole) or items[0].text()
+        item = items[0]
+        # 分组头节点不算选中项目
+        if item.data(0, _GROUP_ROLE):
+            return ""
+        return item.data(0, Qt.UserRole) or item.text(0)
 
     def repo_path(self) -> str:
         proj = self.selected_project()
@@ -1864,68 +2022,161 @@ class MainWindow(QMainWindow):
     def _on_projects_scanned(self, projects: list):
         self.project_list.blockSignals(True)
         self.project_list.clear()
-        notes = self.cfg.get("project_notes", {})
-        for name in projects:
-            item = QListWidgetItem()
-            item.setData(Qt.UserRole, name)
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Unchecked)
+        notes  = self.cfg.get("project_notes", {})
+        groups = self.cfg.get("project_groups", {})   # {group: [proj, ...]}
+
+        # 按保存的分组顺序分配项目；未在任何分组中的归入「未分组」
+        assigned = set()
+        ordered_groups = list(groups.keys())
+        # 确保「未分组」在末尾（如果存在）
+        if DEFAULT_GROUP in ordered_groups:
+            ordered_groups.remove(DEFAULT_GROUP)
+            ordered_groups.append(DEFAULT_GROUP)
+
+        def make_proj_item(grp_node, name):
+            item = QTreeWidgetItem(grp_node)
+            item.setData(0, Qt.UserRole, name)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsDragEnabled | Qt.ItemIsSelectable)
+            item.setCheckState(0, Qt.Unchecked)
             note = notes.get(name, "")
-            item.setText(f"{name}    [{note}]" if note else name)
+            item.setText(0, f"{name}    [{note}]" if note else name)
             if note:
-                item.setToolTip(note)
-            self.project_list.addItem(item)
+                item.setToolTip(0, note)
+            return item
+
+        proj_set = set(projects)
+        for grp_name in ordered_groups:
+            members = [p for p in groups[grp_name] if p in proj_set]
+            if not members:
+                continue
+            grp_node = self.project_list.find_or_create_group(grp_name)
+            for name in members:
+                make_proj_item(grp_node, name)
+                assigned.add(name)
+
+        # 剩余未分组项目
+        unassigned = [p for p in projects if p not in assigned]
+        if unassigned:
+            grp_node = self.project_list.find_or_create_group(DEFAULT_GROUP)
+            for name in unassigned:
+                make_proj_item(grp_node, name)
+
         self.project_list.blockSignals(False)
-        self.project_count_label.setText(f"项目列表 ({len(projects)})（右键可快捷全选/设置备注）")
+        self.project_count_label.setText(f"项目列表 ({len(projects)})（右键可快捷全选/设置备注/管理分组）")
         self.log(f"共发现 {len(projects)} 个 git 项目")
         last = self.cfg.get("last_project", "")
-        if last in projects:
-            for i in range(self.project_list.count()):
-                if self.project_list.item(i).data(Qt.UserRole) == last:
-                    self.project_list.setCurrentRow(i)
+        if last in proj_set:
+            for it in self.project_list.all_project_items():
+                if it.data(0, Qt.UserRole) == last:
+                    self.project_list.setCurrentItem(it)
                     break
 
     def _project_menu(self, pos):
         item = self.project_list.itemAt(pos)
+        # 分组头节点不弹项目菜单
+        is_group = item and item.data(0, _GROUP_ROLE)
+        is_proj  = item and not is_group
+
         menu = QMenu(self)
-        act_select_all = menu.addAction("☑ 全选所有项目")
-        act_deselect_all = menu.addAction("☐ 取消全选")
-        act_open = None
-        act_note = None
-        act_clear = None
-        
-        if item:
-            menu.addSeparator()
-            name = item.data(Qt.UserRole)
+        act_new_group = menu.addAction("📁 新建分组…")
+
+        act_move   = None
+        act_open   = None
+        act_note   = None
+        act_clear  = None
+        act_rename_grp = None
+        act_del_grp    = None
+        act_to_top     = None
+        act_move_up    = None
+
+        if is_proj:
+            name  = item.data(0, Qt.UserRole)
             notes = self.cfg.setdefault("project_notes", {})
-            act_open = menu.addAction("📂 打开当前目录")
-            act_note = menu.addAction("📝 设置/修改备注…")
+            menu.addSeparator()
+            act_open  = menu.addAction("📂 打开目录")
+            act_note  = menu.addAction("📝 设置/修改备注…")
             act_clear = menu.addAction("❌ 清除备注")
             act_clear.setEnabled(bool(notes.get(name)))
-            
+            # 移至分组子菜单
+            move_menu = menu.addMenu("➡ 移至分组")
+            act_move = {}
+            for gn in self.project_list.group_names():
+                act_move[move_menu.addAction(gn)] = gn
+            act_move[move_menu.addAction("+ 新建分组…")] = None
+
+        if is_group:
+            grp_name = item.text(0)
+            root = self.project_list.invisibleRootItem()
+            grp_idx = root.indexOfChild(item)
+            is_ungrouped = (grp_name == DEFAULT_GROUP)
+            menu.addSeparator()
+            act_to_top = menu.addAction("⬆ 置顶")
+            act_move_up = menu.addAction("↑ 上移一位")
+            # 未分组 或 已在最顶 则禁用
+            act_to_top.setEnabled(not is_ungrouped and grp_idx > 0)
+            act_move_up.setEnabled(not is_ungrouped and grp_idx > 0)
+            menu.addSeparator()
+            act_rename_grp = menu.addAction("✏ 重命名分组…")
+            act_del_grp    = menu.addAction("🗑 删除分组（项目移至未分组）")
+
         action = menu.exec_(self.project_list.mapToGlobal(pos))
         if not action:
             return
-            
-        if action is act_select_all:
-            for i in range(self.project_list.count()):
-                self.project_list.item(i).setCheckState(Qt.Checked)
-        elif action is act_deselect_all:
-            for i in range(self.project_list.count()):
-                self.project_list.item(i).setCheckState(Qt.Unchecked)
-        elif item:
-            name = item.data(Qt.UserRole)
+
+        # ── 新建分组 ─────────────────────────────────────────────────────────
+        if action is act_new_group:
+            gname, ok = QInputDialog.getText(self, "新建分组", "分组名称：")
+            if ok and gname.strip():
+                self.project_list.find_or_create_group(gname.strip())
+                self._save_group_order()
+            return
+
+        # ── 分组头操作 ───────────────────────────────────────────────────────
+        if is_group:
+            grp_name = item.text(0)
+            root = self.project_list.invisibleRootItem()
+            grp_idx = root.indexOfChild(item)
+            if action is act_to_top:
+                root.takeChild(grp_idx)
+                root.insertChild(0, item)
+                self._save_group_order()
+            elif action is act_move_up:
+                if grp_idx > 0:
+                    root.takeChild(grp_idx)
+                    root.insertChild(grp_idx - 1, item)
+                    self._save_group_order()
+            elif action is act_rename_grp:
+                new_name, ok = QInputDialog.getText(
+                    self, "重命名分组", "新分组名：", text=grp_name)
+                if ok and new_name.strip() and new_name.strip() != grp_name:
+                    item.setText(0, new_name.strip())
+                    self._save_group_order()
+            elif action is act_del_grp:
+                # 把该组下所有项目移到「未分组」
+                ungrp = self.project_list.find_or_create_group(DEFAULT_GROUP)
+                while item.childCount():
+                    child = item.takeChild(0)
+                    ungrp.addChild(child)
+                root.takeChild(root.indexOfChild(item))
+                self._save_group_order()
+            return
+
+
+        # ── 项目操作 ─────────────────────────────────────────────────────────
+        if is_proj:
+            name  = item.data(0, Qt.UserRole)
             notes = self.cfg.setdefault("project_notes", {})
+
             if action is act_open:
                 proj_path = os.path.join(self.work_dir(), name)
                 if os.path.exists(proj_path):
-                    import os
                     try:
                         os.startfile(proj_path)
                     except Exception as e:
                         QMessageBox.warning(self, "错误", f"无法打开目录:\n{e}")
                 else:
                     QMessageBox.warning(self, "错误", f"该目录不存在:\n{proj_path}")
+
             elif action is act_note:
                 text, ok = QInputDialog.getText(
                     self, "项目备注", f"为 [{name}] 设置备注：", text=notes.get(name, ""))
@@ -1937,15 +2188,37 @@ class MainWindow(QMainWindow):
                         notes.pop(name, None)
                     self._apply_note_to_item(item, name)
                     cfg_mod.save_config(self.cfg)
+
             elif action is act_clear:
                 notes.pop(name, None)
                 self._apply_note_to_item(item, name)
                 cfg_mod.save_config(self.cfg)
 
+            elif act_move and action in act_move:
+                dest_grp_name = act_move[action]
+                if dest_grp_name is None:
+                    # 新建分组再移入
+                    dest_grp_name, ok = QInputDialog.getText(self, "新建分组", "分组名称：")
+                    if not ok or not dest_grp_name.strip():
+                        return
+                    dest_grp_name = dest_grp_name.strip()
+                src_root = item.parent() or self.project_list.invisibleRootItem()
+                src_root.removeChild(item)
+                dest_root = self.project_list.find_or_create_group(dest_grp_name)
+                dest_root.addChild(item)
+                dest_root.setExpanded(True)
+                self.project_list.setCurrentItem(item)
+                self._save_group_order()
+
     def _apply_note_to_item(self, item, name: str):
         note = self.cfg.get("project_notes", {}).get(name, "")
-        item.setText(f"{name}    [{note}]" if note else name)
-        item.setToolTip(note)
+        item.setText(0, f"{name}    [{note}]" if note else name)
+        item.setToolTip(0, note)
+
+    def _save_group_order(self, *_):
+        """将当前树的分组结构持久化到 cfg["project_groups"]。"""
+        self.cfg["project_groups"] = self.project_list.dump_order()
+        cfg_mod.save_config(self.cfg)
 
     def _dir_history_menu(self, pos):
         view = self.dir_combo.view()
@@ -2963,10 +3236,9 @@ class MainWindow(QMainWindow):
     def build_project(self):
         """打包项目功能，支持勾选多个项目进行批量并发打包"""
         checked_paths = []
-        for i in range(self.project_list.count()):
-            item = self.project_list.item(i)
-            if item.checkState() == Qt.Checked:
-                name = item.data(Qt.UserRole)
+        for item in self.project_list.all_project_items():
+            if item.checkState(0) == Qt.Checked:
+                name = item.data(0, Qt.UserRole)
                 proj_path = os.path.join(self.work_dir(), name)
                 checked_paths.append(proj_path)
                 
