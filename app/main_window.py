@@ -272,6 +272,15 @@ class CloneDialog(QDialog):
 class BranchConfigDialog(QDialog):
     """新建分支配置选择对话框：产业/实训模块选择，生成备注标签。"""
 
+    EDU_PRODUCT_LINES = [
+        "教育产品线-数据分析软件",
+        "教育产品线-可视化软件",
+    ]
+    EDU_PRODUCT_LABELS = {
+        "教育产品线-数据分析软件": "数据分析软件",
+        "教育产品线-可视化软件": "可视化软件",
+    }
+
     # (分类名, 序号, [(模块名, 序号), ...])
     SHIXUN_GROUPS = [
         ("其他",  1, [("数据中心", 1), ("传播分析", 1), ("报告中心", 1)]),
@@ -285,7 +294,7 @@ class BranchConfigDialog(QDialog):
     def __init__(self, parent=None, initial_note: str = ""):
         super().__init__(parent)
         self.setWindowTitle("选择分支配置模块")
-        self.setMinimumWidth(560)
+        self.setMinimumWidth(680)
         self._build_ui()
         if initial_note:
             self._restore(initial_note)
@@ -296,15 +305,29 @@ class BranchConfigDialog(QDialog):
 
         # ── 顶层选择 ──────────────────────────────────────────────────────
         top_grp = QGroupBox("包含范围")
-        top_row = QHBoxLayout(top_grp)
+        top_grid = QGridLayout(top_grp)
         self.chk_chanye  = QCheckBox("产业（教学）")
         self.chk_shixun  = QCheckBox("实训（大屏）")
         self.chk_chanye.stateChanged.connect(self._update_preview)
         self.chk_shixun.stateChanged.connect(self._toggle_shixun)
-        top_row.addWidget(self.chk_chanye)
-        top_row.addSpacing(24)
-        top_row.addWidget(self.chk_shixun)
-        top_row.addStretch()
+        top_grid.addWidget(self.chk_chanye, 0, 0)
+        sep_scope = QLabel("|")
+        sep_scope.setAlignment(Qt.AlignCenter)
+        top_grid.addWidget(sep_scope, 0, 1)
+        top_grid.addWidget(self.chk_shixun, 0, 2)
+        sep_product = QLabel("|")
+        sep_product.setAlignment(Qt.AlignCenter)
+        top_grid.addWidget(sep_product, 0, 3)
+
+        self.edu_product_checks = []
+        top_grid.addWidget(QLabel("教育产品线"), 0, 4)
+        for idx, product_name in enumerate(self.EDU_PRODUCT_LINES, start=5):
+            chk = QCheckBox(self.EDU_PRODUCT_LABELS.get(product_name, product_name))
+            chk.setProperty("note_value", product_name)
+            chk.stateChanged.connect(self._update_preview)
+            self.edu_product_checks.append(chk)
+            top_grid.addWidget(chk, 0, idx)
+        top_grid.setColumnStretch(7, 1)
         layout.addWidget(top_grp)
 
         # ── 实训子模块（默认隐藏）────────────────────────────────────────
@@ -387,6 +410,11 @@ class BranchConfigDialog(QDialog):
         parts = []
         if self.chk_chanye.isChecked():
             parts.append("产业（教学）")
+        parts.extend(
+            chk.property("note_value") or chk.text()
+            for chk in getattr(self, "edu_product_checks", [])
+            if chk.isChecked()
+        )
         if self.chk_shixun.isChecked():
             group_parts = []
             for cat_name, cat_order, modules in self.SHIXUN_GROUPS:
@@ -404,8 +432,9 @@ class BranchConfigDialog(QDialog):
         self.preview_label.setText(text)
 
     def _on_ok(self):
-        if not self.chk_chanye.isChecked() and not self.chk_shixun.isChecked():
-            QMessageBox.warning(self, "提示", "请至少选择一项（产业或实训）")
+        has_edu_product = any(chk.isChecked() for chk in getattr(self, "edu_product_checks", []))
+        if not self.chk_chanye.isChecked() and not self.chk_shixun.isChecked() and not has_edu_product:
+            QMessageBox.warning(self, "提示", "请至少选择一项配置")
             return
         self.accept()
 
@@ -416,6 +445,10 @@ class BranchConfigDialog(QDialog):
         """从已保存的备注字符串还原选中状态。"""
         if "产业（教学）" in note:
             self.chk_chanye.setChecked(True)
+        for chk in getattr(self, "edu_product_checks", []):
+            note_value = chk.property("note_value") or chk.text()
+            if note_value in note or chk.text() in note:
+                chk.setChecked(True)
         if "实训" in note:
             self.chk_shixun.setChecked(True)
             for mod_name, chk in self.module_checks.items():
@@ -426,6 +459,8 @@ class BranchConfigDialog(QDialog):
 class ImagePreviewDialog(QDialog):
     def __init__(self, image_path, parent=None):
         super().__init__(parent)
+        self.image_path = image_path
+        self._delete_callback = None
         self.setWindowTitle("图片预览")
         self.setMinimumSize(600, 450)
         layout = QVBoxLayout(self)
@@ -450,6 +485,12 @@ class ImagePreviewDialog(QDialog):
         btn_open_external.setStyleSheet("background-color: #1769d6; color: white; padding: 6px 12px; border: none; border-radius: 4px;")
         btn_open_external.clicked.connect(lambda: self._open_external(image_path))
         btn_box.addWidget(btn_open_external)
+
+        self.btn_delete = QPushButton("🗑 删除当前")
+        self.btn_delete.setStyleSheet("background-color: #c62828; color: white; padding: 6px 12px; border: none; border-radius: 4px;")
+        self.btn_delete.clicked.connect(self._delete_current)
+        self.btn_delete.setVisible(False)
+        btn_box.addWidget(self.btn_delete)
         
         btn_close = QPushButton("关闭")
         btn_close.setStyleSheet("background-color: #333333; color: white; padding: 6px 12px; border: none; border-radius: 4px;")
@@ -464,6 +505,104 @@ class ImagePreviewDialog(QDialog):
             os.startfile(os.path.abspath(path))
         except Exception as e:
             QMessageBox.warning(self, "错误", f"无法打开文件: {e}")
+
+    def set_delete_callback(self, callback):
+        self._delete_callback = callback
+        self.btn_delete.setVisible(True)
+
+    def _delete_current(self):
+        if not self._delete_callback:
+            return
+        if QMessageBox.question(self, "确认删除", f"确定删除当前图片吗？\n\n{os.path.basename(self.image_path)}") != QMessageBox.Yes:
+            return
+        if self._delete_callback(self.image_path):
+            self.accept()
+
+
+class MultiImagePreviewDialog(QDialog):
+    def __init__(self, image_paths, parent=None):
+        super().__init__(parent)
+        self.image_paths = list(image_paths)
+        self.setWindowTitle("图片预览")
+        self.setMinimumSize(780, 520)
+        self._delete_callback = None
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+
+        self.list_widget = QListWidget()
+        self.list_widget.setMaximumWidth(240)
+        for path in self.image_paths:
+            self.list_widget.addItem(os.path.basename(path))
+        self.list_widget.currentRowChanged.connect(self._show_image)
+        layout.addWidget(self.list_widget)
+
+        right = QVBoxLayout()
+        self.label = QLabel()
+        self.label.setAlignment(Qt.AlignCenter)
+        right.addWidget(self.label, 1)
+
+        btn_box = QHBoxLayout()
+        self.btn_open_external = QPushButton("🌐 使用系统查看器打开")
+        self.btn_open_external.setStyleSheet("background-color: #1769d6; color: white; padding: 6px 12px; border: none; border-radius: 4px;")
+        self.btn_open_external.clicked.connect(self._open_current)
+        btn_box.addWidget(self.btn_open_external)
+
+        self.btn_delete = QPushButton("🗑 删除当前")
+        self.btn_delete.setStyleSheet("background-color: #c62828; color: white; padding: 6px 12px; border: none; border-radius: 4px;")
+        self.btn_delete.clicked.connect(self._delete_current)
+        btn_box.addWidget(self.btn_delete)
+
+        btn_close = QPushButton("关闭")
+        btn_close.setStyleSheet("background-color: #333333; color: white; padding: 6px 12px; border: none; border-radius: 4px;")
+        btn_close.clicked.connect(self.accept)
+        btn_box.addWidget(btn_close)
+        right.addLayout(btn_box)
+        layout.addLayout(right, 1)
+
+        if self.image_paths:
+            self.list_widget.setCurrentRow(0)
+
+    def _show_image(self, row):
+        if row < 0 or row >= len(self.image_paths):
+            self.label.clear()
+            return
+        path = self.image_paths[row]
+        pixmap = QPixmap(path)
+        if pixmap.isNull():
+            self.label.setText("图片加载失败，请检查文件是否存在")
+            self.label.setStyleSheet("color: red; font-size: 14px;")
+        else:
+            self.label.setStyleSheet("")
+            self.label.setPixmap(pixmap.scaled(900, 650, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
+    def _open_current(self):
+        row = self.list_widget.currentRow()
+        if row < 0 or row >= len(self.image_paths):
+            return
+        try:
+            os.startfile(os.path.abspath(self.image_paths[row]))
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"无法打开文件: {e}")
+
+    def set_delete_callback(self, callback):
+        self._delete_callback = callback
+
+    def _delete_current(self):
+        row = self.list_widget.currentRow()
+        if row < 0 or row >= len(self.image_paths):
+            return
+        path = self.image_paths[row]
+        if QMessageBox.question(self, "确认删除", f"确定删除当前图片吗？\n\n{os.path.basename(path)}") != QMessageBox.Yes:
+            return
+        if self._delete_callback and self._delete_callback(path):
+            self.image_paths.pop(row)
+            self.list_widget.takeItem(row)
+            if self.image_paths:
+                self.list_widget.setCurrentRow(min(row, len(self.image_paths) - 1))
+            else:
+                self.label.clear()
 
 
 class IpCellWidget(QWidget):
@@ -544,11 +683,12 @@ class ConfigTagsCellWidget(QWidget):
 
         
         has_chanye = "产业（教学）" in self.note_str
+        has_edu_product = "教育产品线-" in self.note_str
         has_shixun = "实训" in self.note_str
         
         theme = getattr(main_win, "current_theme", "dark")
         
-        if not has_chanye and not has_shixun:
+        if not has_chanye and not has_edu_product and not has_shixun:
             lbl_none = QLabel("—")
             lbl_none.setStyleSheet("color: #777777;")
             layout.addWidget(lbl_none)
@@ -583,6 +723,47 @@ class ConfigTagsCellWidget(QWidget):
                     }
                 """)
             layout.addWidget(lbl_chanye)
+
+        if has_edu_product:
+            btn_edu = QPushButton(" 教育 ")
+            btn_edu.setCursor(Qt.PointingHandCursor)
+            btn_edu.setToolTip("已选择教育产品线。点击查看详情…")
+            if theme == "light":
+                btn_edu.setStyleSheet("""
+                    QPushButton {
+                        background-color: #fff8e1;
+                        color: #ef6c00;
+                        border: 1px solid #ffe0b2;
+                        border-radius: 4px;
+                        font-weight: bold;
+                        font-size: 12px;
+                        padding: 3px 6px;
+                    }
+                    QPushButton:hover {
+                        background-color: #ef6c00;
+                        color: white;
+                        border-color: #ef6c00;
+                    }
+                """)
+            else:
+                btn_edu.setStyleSheet("""
+                    QPushButton {
+                        background-color: #5d4037;
+                        color: #ffe0b2;
+                        border: 1px solid #8d6e63;
+                        border-radius: 4px;
+                        font-weight: bold;
+                        font-size: 12px;
+                        padding: 3px 6px;
+                    }
+                    QPushButton:hover {
+                        background-color: #8d6e63;
+                        color: white;
+                        border-color: #a1887f;
+                    }
+                """)
+            btn_edu.clicked.connect(self._show_edu_details)
+            layout.addWidget(btn_edu)
             
         if has_shixun:
             btn_shixun = QPushButton(" 实训 ")
@@ -629,12 +810,16 @@ class ConfigTagsCellWidget(QWidget):
         shixun_detail = self.main_win._format_shixun_detail(self.note_str)
         QMessageBox.information(self, "实训（大屏）配置详情", shixun_detail)
 
+    def _show_edu_details(self):
+        edu_detail = self.main_win._format_chanye_detail(self.note_str)
+        QMessageBox.information(self, "教育产品线配置详情", edu_detail)
+
 
 
 class ImageCellWidget(QWidget):
-    def __init__(self, image_path, main_win, global_idx):
+    def __init__(self, image_paths, main_win, global_idx):
         super().__init__()
-        self.image_path = image_path
+        self.image_paths = self._normalize_paths(image_paths)
         self.main_win = main_win
         self.global_idx = global_idx
         
@@ -680,12 +865,12 @@ class ImageCellWidget(QWidget):
                 color: #888888;
             }
         """)
-        self.btn_view.setEnabled(bool(image_path))
+        self.btn_view.setEnabled(bool(self.image_paths))
         self.btn_view.clicked.connect(self.view_image)
         layout.addWidget(self.btn_view)
         
         self.btn_del = QPushButton("🗑️")
-        self.btn_del.setToolTip("清除图片")
+        self.btn_del.setToolTip("清空该记录的全部图片")
         self.btn_del.setFixedWidth(36)
         self.btn_del.setStyleSheet("""
             QPushButton {
@@ -703,25 +888,33 @@ class ImageCellWidget(QWidget):
                 color: #888888;
             }
         """)
-        self.btn_del.setEnabled(bool(image_path))
+        self.btn_del.setEnabled(bool(self.image_paths))
         self.btn_del.clicked.connect(self.delete_image)
         layout.addWidget(self.btn_del)
         
-        self.lbl_info = QLabel("已上传" if image_path else "未上传")
-        self.lbl_info.setStyleSheet("color: #4caf50; font-size: 11px;" if image_path else "color: #888888; font-size: 11px;")
+        count = len(self.image_paths)
+        self.lbl_info = QLabel(f"{count}张" if count else "未上传")
+        self.lbl_info.setStyleSheet("color: #4caf50; font-size: 11px;" if count else "color: #888888; font-size: 11px;")
         layout.addWidget(self.lbl_info)
         layout.addStretch()
+
+    @staticmethod
+    def _normalize_paths(value):
+        if isinstance(value, list):
+            return [str(p) for p in value if str(p).strip()]
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        return []
 
     def upload_image(self):
         from PyQt5.QtWidgets import QFileDialog
         import shutil
-        import os
         import time
         
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "选择部署图片", "", "图片文件 (*.png *.jpg *.jpeg *.gif *.bmp)"
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self, "选择部署图片（可多选）", "", "图片文件 (*.png *.jpg *.jpeg *.gif *.bmp)"
         )
-        if not file_path:
+        if not file_paths:
             return
             
         # Create assets/teach_images folder in workspace
@@ -735,19 +928,24 @@ class ImageCellWidget(QWidget):
                 if not os.path.exists(target_dir):
                     os.makedirs(target_dir)
                     
-        ext = os.path.splitext(file_path)[1]
-        filename = f"img_{int(time.time())}{ext}"
-        dest_path = os.path.join(target_dir, filename)
-        
         try:
-            shutil.copy(file_path, dest_path)
-            rel_path = os.path.relpath(dest_path, self.main_win.work_dir())
+            rel_paths = []
+            for idx, file_path in enumerate(file_paths):
+                ext = os.path.splitext(file_path)[1]
+                filename = f"img_{int(time.time())}_{idx}{ext}"
+                dest_path = os.path.join(target_dir, filename)
+                shutil.copy(file_path, dest_path)
+                rel_paths.append(os.path.relpath(dest_path, self.main_win.work_dir()))
             
             # Update database
             if self.global_idx < len(self.main_win.teach_data):
-                self.main_win.teach_data[self.global_idx]["image_path"] = rel_path
+                item = self.main_win.teach_data[self.global_idx]
+                current_paths = self._normalize_paths(item.get("image_paths", item.get("image_path", "")))
+                current_paths.extend(rel_paths)
+                item["image_paths"] = current_paths
+                item["image_path"] = current_paths[0] if current_paths else ""
                 cfg_mod.save_config(self.main_win.cfg)
-                self.main_win.log(f"已上传图片: {rel_path}", self.main_win.LOG_COLORS["ok"])
+                self.main_win.log(f"已上传 {len(rel_paths)} 张图片", self.main_win.LOG_COLORS["ok"])
                 
                 # Refresh table
                 self.main_win._render_teach_table()
@@ -755,30 +953,84 @@ class ImageCellWidget(QWidget):
             QMessageBox.critical(self, "错误", f"图片保存失败: {e}")
 
     def view_image(self):
-        import os
-        if not self.image_path:
+        if not self.image_paths:
             return
-        # Locate the image file
-        full_path = os.path.join(self.main_win.work_dir(), self.image_path)
-        if not os.path.exists(full_path):
-            QMessageBox.warning(self, "警告", f"图片文件不存在: {self.image_path}")
+        self._image_changed_in_preview = False
+        full_paths = [os.path.join(self.main_win.work_dir(), p) for p in self.image_paths]
+        missing = [p for p, full in zip(self.image_paths, full_paths) if not os.path.exists(full)]
+        full_paths = [full for full in full_paths if os.path.exists(full)]
+        if missing:
+            QMessageBox.warning(self, "警告", "以下图片文件不存在：\n\n" + "\n".join(missing[:10]))
+        if not full_paths:
             return
-                
-        dlg = ImagePreviewDialog(full_path, self)
-        dlg.exec_()
+        if len(full_paths) == 1:
+            dlg = ImagePreviewDialog(full_paths[0], self)
+            dlg.set_delete_callback(self._delete_preview_image)
+            dlg.exec_()
+        else:
+            dlg = MultiImagePreviewDialog(full_paths, self)
+            dlg.set_delete_callback(self._delete_preview_image)
+            dlg.exec_()
+        if getattr(self, "_image_changed_in_preview", False):
+            self.main_win._render_teach_table()
+
+    def _delete_preview_image(self, full_path: str) -> bool:
+        if self.global_idx >= len(self.main_win.teach_data):
+            return False
+        item = self.main_win.teach_data[self.global_idx]
+        paths = self._normalize_paths(item.get("image_paths", item.get("image_path", "")))
+        if not paths:
+            return False
+        delete_path = None
+        for path in paths:
+            if os.path.abspath(os.path.join(self.main_win.work_dir(), path)) == os.path.abspath(full_path):
+                delete_path = path
+                break
+        if not delete_path:
+            return False
+        paths = [path for path in paths if path != delete_path]
+        item["image_paths"] = paths
+        item["image_path"] = paths[0] if paths else ""
+        try:
+            if os.path.exists(full_path):
+                os.remove(full_path)
+        except OSError as e:
+            self.main_win.log(f"图片记录已删除，但文件删除失败：{delete_path} - {e}", self.main_win.LOG_COLORS["err"])
+        cfg_mod.save_config(self.main_win.cfg)
+        self.main_win.log(f"已删除部署图片：{delete_path}", self.main_win.LOG_COLORS["hint"])
+        self._image_changed_in_preview = True
+        return True
 
     def delete_image(self):
-        if self.global_idx < len(self.main_win.teach_data):
-            self.main_win.teach_data[self.global_idx]["image_path"] = ""
-            cfg_mod.save_config(self.main_win.cfg)
-            self.main_win.log("已清除部署图片")
-            self.main_win._render_teach_table()
+        if self.global_idx >= len(self.main_win.teach_data):
+            return
+        item = self.main_win.teach_data[self.global_idx]
+        paths = self._normalize_paths(item.get("image_paths", item.get("image_path", "")))
+        if not paths:
+            return
+
+        if QMessageBox.question(
+            self, "确认清空图片", f"确定清空该记录的全部 {len(paths)} 张图片吗？"
+        ) != QMessageBox.Yes:
+            return
+        for path in paths:
+            full_path = os.path.join(self.main_win.work_dir(), path)
+            try:
+                if os.path.exists(full_path):
+                    os.remove(full_path)
+            except OSError as e:
+                self.main_win.log(f"图片记录已清空，但文件删除失败：{path} - {e}", self.main_win.LOG_COLORS["err"])
+        item["image_paths"] = []
+        item["image_path"] = ""
+        cfg_mod.save_config(self.main_win.cfg)
+        self.main_win.log(f"已清空部署图片：{len(paths)} 张", self.main_win.LOG_COLORS["hint"])
+        self.main_win._render_teach_table()
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Git 多项目分支管理工具 v1.1 - builderTool")
+        self.setWindowTitle("Git 多项目分支管理工具 v1.0.2 - builderTool")
         self.resize(1180, 760)
 
         self.cfg = cfg_mod.load_config()
@@ -1064,7 +1316,7 @@ class MainWindow(QMainWindow):
             ]
             cfg_mod.save_config(self.cfg)
         
-        # 兼容性迁移：确保每个项都包含 date 和 image_path
+        # 兼容性迁移：确保每个项都包含 date 和 image_paths
         changed = False
         for item in self.cfg.get("teach_deployments", []):
             if "date" not in item:
@@ -1073,6 +1325,28 @@ class MainWindow(QMainWindow):
             if "image_path" not in item:
                 item["image_path"] = ""
                 changed = True
+            if "image_paths" not in item:
+                item["image_paths"] = [item["image_path"]] if item.get("image_path") else []
+                changed = True
+            elif isinstance(item.get("image_paths"), str):
+                item["image_paths"] = [item["image_paths"]] if item["image_paths"] else []
+                changed = True
+            if item.get("image_paths") and not item.get("image_path"):
+                item["image_path"] = item["image_paths"][0]
+                changed = True
+        seen_branches = set()
+        deduped_deployments = []
+        for item in self.cfg.get("teach_deployments", []):
+            branch_name = item.get("branch_name", "")
+            if branch_name:
+                if branch_name in seen_branches:
+                    changed = True
+                    continue
+                seen_branches.add(branch_name)
+            deduped_deployments.append(item)
+        if len(deduped_deployments) != len(self.cfg.get("teach_deployments", [])):
+            self.cfg["teach_deployments"] = deduped_deployments
+            changed = True
         if changed:
             cfg_mod.save_config(self.cfg)
         
@@ -1301,7 +1575,7 @@ class MainWindow(QMainWindow):
             
             # Image (Col 5) - ImageCellWidget
             self.teach_table.setItem(row_idx, 5, QTableWidgetItem(""))
-            img_widget = ImageCellWidget(item.get("image_path", ""), self, global_idx)
+            img_widget = ImageCellWidget(item.get("image_paths", item.get("image_path", "")), self, global_idx)
             self.teach_table.setCellWidget(row_idx, 5, img_widget)
             
             # Remark (Col 6)
@@ -1338,6 +1612,7 @@ class MainWindow(QMainWindow):
                 or query in d.get("ip", "").lower() 
                 or query in d.get("remark", "").lower() 
                 or query in d.get("base", "").lower()
+                or query in d.get("branch_name", "").lower()
                 or query in d.get("config_note", "").lower()
             ]
         self.teach_current_page = 1
@@ -1351,6 +1626,7 @@ class MainWindow(QMainWindow):
             "ip": "",
             "date": datetime.today().strftime("%Y-%m-%d"),
             "image_path": "",
+            "image_paths": [],
             "remark": "",
             "base": ""
         }
@@ -1577,7 +1853,7 @@ class MainWindow(QMainWindow):
             "font-size:11px;padding:0 4px;border:none;}"
             "QPushButton:hover{background:#2ecc71;}"
         )
-        self.cur_cfg_tag_chanye.setToolTip("当前分支已配置产业（教学）模块，点击修改配置")
+        self.cur_cfg_tag_chanye.setToolTip("当前分支已配置产业（教学）或教育产品线，点击修改配置")
         self.cur_cfg_tag_chanye.clicked.connect(self._edit_cur_branch_config)
         self.cur_cfg_tag_chanye.setVisible(False)
         r1.addWidget(self.cur_cfg_tag_chanye)
@@ -1626,6 +1902,9 @@ class MainWindow(QMainWindow):
         self.remote_list = QListWidget()
         self.remote_list.setMaximumHeight(120)
         self.remote_list.setVisible(False)
+        self.remote_list.itemDoubleClicked.connect(lambda _: self.checkout_remote_branch())
+        self.remote_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.remote_list.customContextMenuRequested.connect(self._remote_branch_menu)
         g1v.addWidget(self.remote_list)
         layout.addWidget(g1)
 
@@ -1692,7 +1971,7 @@ class MainWindow(QMainWindow):
         # 产业/实训配置标签（选配置后出现，点击查看详情）
         self.tag_chanye = QPushButton("产业")
         self.tag_chanye.setFixedSize(46, 22)
-        self.tag_chanye.setToolTip("已选择产业（教学）— 点击查看选中详情")
+        self.tag_chanye.setToolTip("已选择产业（教学）或教育产品线— 点击查看选中详情")
         self.tag_chanye.setStyleSheet(
             "QPushButton{background:#27ae60;color:#fff;border-radius:10px;"
             "font-size:11px;padding:0 4px;border:none;}"
@@ -1721,7 +2000,7 @@ class MainWindow(QMainWindow):
         row1_lay.addWidget(del_branch_btn)
 
         cfg_btn = QPushButton("⚙ 选择配置…")
-        cfg_btn.setToolTip("选择产业/实训模块，自动生成配置标签")
+        cfg_btn.setToolTip("选择产业/实训/教育产品线模块，自动生成配置标签")
         cfg_btn.clicked.connect(self._open_branch_config)
         row1_lay.addWidget(cfg_btn)
 
@@ -1744,33 +2023,65 @@ class MainWindow(QMainWindow):
         layout.addWidget(g3)
 
 
-        # IP 替换
-        g4 = QGroupBox("打包配置（IP 替换）")
-        r4 = QHBoxLayout(g4)
-        r4.addWidget(QLabel("旧IP："))
+        # IP + Logo 替换
+        g4 = QGroupBox("打包配置（IP + Logo 替换）")
+        g4v = QVBoxLayout(g4)
+        ip_row = QHBoxLayout()
+        logo_row = QHBoxLayout()
+        ip_row.addWidget(QLabel("旧IP："))
         self.old_ip_edit = QComboBox()
         self.old_ip_edit.setEditable(True)
         self.old_ip_edit.setMinimumWidth(150)
         self.old_ip_edit.lineEdit().setPlaceholderText("可下拉选历史")
-        r4.addWidget(self.old_ip_edit, 1)
+        ip_row.addWidget(self.old_ip_edit, 1)
         del_old_ip_btn = QPushButton("✕")
         del_old_ip_btn.setFixedWidth(32)
         del_old_ip_btn.setToolTip("删除当前旧IP历史条目")
         del_old_ip_btn.clicked.connect(self._delete_old_ip)
-        r4.addWidget(del_old_ip_btn)
-        r4.addWidget(QLabel("新IP："))
+        ip_row.addWidget(del_old_ip_btn)
+        ip_row.addWidget(QLabel("新IP："))
         self.new_ip_edit = QLineEdit()
         self.new_ip_edit.setPlaceholderText("请输入替换IP")
-        r4.addWidget(self.new_ip_edit, 1)
+        ip_row.addWidget(self.new_ip_edit, 1)
         self.preview_ip_btn = QPushButton("预览匹配")
         self.preview_ip_btn.clicked.connect(self.preview_ip)
-        r4.addWidget(self.preview_ip_btn)
-        self.replace_ip_btn = QPushButton("执行替换")
-        self.replace_ip_btn.clicked.connect(self.replace_ip)
-        r4.addWidget(self.replace_ip_btn)
+        ip_row.addWidget(self.preview_ip_btn)
         self.ip_history_btn = QPushButton("历史")
         self.ip_history_btn.clicked.connect(self.show_ip_history)
-        r4.addWidget(self.ip_history_btn)
+        ip_row.addWidget(self.ip_history_btn)
+        self.replace_ip_btn = QPushButton("一键替换")
+        self.replace_ip_btn.setToolTip("执行 IP 替换；如已上传 Logo，则同时替换登录 Logo")
+        self.replace_ip_btn.clicked.connect(self.replace_ip)
+        ip_row.addWidget(self.replace_ip_btn)
+        g4v.addLayout(ip_row)
+
+        self.logo_file_path = ""
+        self.logo_label = QLabel("Logo：")
+        logo_row.addWidget(self.logo_label)
+        self.upload_logo_btn = QPushButton("上传Logo")
+        self.upload_logo_btn.setToolTip("仅教育旧项目可用：选择学校 Logo，未上传则一键替换时不处理 Logo")
+        self.upload_logo_btn.clicked.connect(self.select_logo_file)
+        self.upload_logo_btn.setVisible(False)
+        logo_row.addWidget(self.upload_logo_btn)
+        self.logo_file_label = QLabel("未上传")
+        self.logo_file_label.setMinimumWidth(56)
+        self.logo_file_label.setToolTip("未上传 Logo 时不会替换 Logo")
+        self.logo_file_label.setVisible(False)
+        logo_row.addWidget(self.logo_file_label)
+        self.preview_logo_btn = QPushButton("预览Logo")
+        self.preview_logo_btn.setToolTip("预览已上传的 Logo")
+        self.preview_logo_btn.clicked.connect(self.preview_logo_file)
+        self.preview_logo_btn.setVisible(False)
+        self.preview_logo_btn.setEnabled(False)
+        logo_row.addWidget(self.preview_logo_btn)
+        self.clear_logo_btn = QPushButton("✕")
+        self.clear_logo_btn.setFixedWidth(28)
+        self.clear_logo_btn.setToolTip("清除已选择的 Logo")
+        self.clear_logo_btn.clicked.connect(self.clear_logo_file)
+        self.clear_logo_btn.setVisible(False)
+        logo_row.addWidget(self.clear_logo_btn)
+        logo_row.addStretch(1)
+        g4v.addLayout(logo_row)
         layout.addWidget(g4)
 
         # 日志
@@ -1807,7 +2118,8 @@ class MainWindow(QMainWindow):
         self._busy_buttons = [
             self.scan_btn, self.clone_btn, self.fetch_branch_btn,
             self.status_btn, self.pull_btn, self.add_btn, self.commit_btn, self.push_btn,
-            self.create_branch_btn, self.preview_ip_btn, self.replace_ip_btn, self.build_btn,
+            self.create_branch_btn, self.preview_ip_btn, self.replace_ip_btn,
+            self.upload_logo_btn, self.preview_logo_btn, self.clear_logo_btn, self.build_btn,
             self.project_list, self.dir_combo, self.edit_cfg_btn, self.quick_publish_btn,
         ]
         return w
@@ -1823,6 +2135,10 @@ class MainWindow(QMainWindow):
         self.current_theme = theme
         self.theme_btn.setText("☀ 浅色" if theme == "light" else "☾ 深色")
         self._apply_log_colors()
+        if hasattr(self, "nav_frame"):
+            self._apply_nav_style()
+        if hasattr(self, "teach_table"):
+            self._apply_teach_table_style()
         # 加载分支名历史
         self._refresh_branch_name_history()
         if dirs:
@@ -1857,6 +2173,34 @@ class MainWindow(QMainWindow):
     def repo_path(self) -> str:
         proj = self.selected_project()
         return os.path.join(self.work_dir(), proj) if proj else ""
+
+    def _is_old_education_project(self, project: str = "") -> bool:
+        project = project or self.selected_project()
+        if not project:
+            return False
+        note = self.cfg.get("project_notes", {}).get(project, "")
+        project_key = project.strip().lower()
+        note_key = note.replace(" ", "")
+        return (
+            project_key == "teaching-practice"
+            or note_key in ("教育（旧）", "教育(旧)", "教育旧")
+            or "教育（旧）" in note_key
+            or "教育(旧)" in note_key
+            or "教育旧" in note_key
+        )
+
+    def _refresh_logo_button_visibility(self):
+        if hasattr(self, "upload_logo_btn"):
+            is_visible = self._is_old_education_project()
+            for widget in (self.logo_label, self.upload_logo_btn, self.logo_file_label, self.preview_logo_btn, self.clear_logo_btn):
+                widget.setVisible(is_visible)
+                widget.setEnabled(is_visible)
+            if is_visible:
+                has_logo = bool(getattr(self, "logo_file_path", ""))
+                self.preview_logo_btn.setEnabled(has_logo)
+                self.clear_logo_btn.setEnabled(has_logo)
+            if not is_visible:
+                self.clear_logo_file()
 
     def current_branch_text(self) -> str:
         """从顶部标签取当前分支名（已去掉"当前分支："前缀）。"""
@@ -2214,6 +2558,8 @@ class MainWindow(QMainWindow):
         note = self.cfg.get("project_notes", {}).get(name, "")
         item.setText(0, f"{name}    [{note}]" if note else name)
         item.setToolTip(0, note)
+        if name == self.selected_project():
+            self._refresh_logo_button_visibility()
 
     def _save_group_order(self, *_):
         """将当前树的分组结构持久化到 cfg["project_groups"]。"""
@@ -2307,8 +2653,10 @@ class MainWindow(QMainWindow):
     def _on_project_selected(self):
         proj = self.selected_project()
         if not proj:
+            self._refresh_logo_button_visibility()
             return
         self.cfg["last_project"] = proj
+        self._refresh_logo_button_visibility()
         
         self.branch_combo.clear()
         self.base_branch_label.setText("—")
@@ -2383,7 +2731,8 @@ class MainWindow(QMainWindow):
 
     def _update_tags_from_note(self, note: str):
         """根据备注内容控制产业/实训标签的显隐。"""
-        self.tag_chanye.setVisible("产业（教学）" in note)
+        has_chanye = "产业（教学）" in note or "教育产品线-" in note
+        self.tag_chanye.setVisible(has_chanye)
         self.tag_shixun.setVisible("实训" in note)
 
     def _show_config_detail(self, kind: str):
@@ -2391,7 +2740,7 @@ class MainWindow(QMainWindow):
         note = self.branch_note_edit.text()
         if kind == "chanye":
             QMessageBox.information(self, "产业（教学）配置",
-                                    "已选择模块：\n\n✔ 产业（教学）")
+                                    self._format_chanye_detail(note))
         elif kind == "shixun":
             QMessageBox.information(self, "实训（大屏）配置",
                                     self._format_shixun_detail(note))
@@ -2410,7 +2759,7 @@ class MainWindow(QMainWindow):
             if entry.get("name") == branch_name:
                 note = entry.get("note", "")
                 break
-        has_chanye = "产业（教学）" in note
+        has_chanye = "产业（教学）" in note or "教育产品线-" in note
         has_shixun = "实训" in note
         self.cur_cfg_tag_chanye.setVisible(has_chanye)
         self.cur_cfg_tag_shixun.setVisible(has_shixun)
@@ -2442,13 +2791,10 @@ class MainWindow(QMainWindow):
             # 同步更新教学部署列表中对应学校的配置模块
             if branch_name.startswith("eduLocal-"):
                 school_name = self._extract_school_name(branch_name)
-                updated = False
-                for item in self.cfg.get("teach_deployments", []):
-                    if item.get("school") == school_name:
-                        item["config_note"] = new_note
-                        updated = True
-                        break
-                if updated:
+                target_item = self._find_teach_deployment(branch_name, school_name)
+                if target_item:
+                    target_item["branch_name"] = branch_name
+                    target_item["config_note"] = new_note
                     cfg_mod.save_config(self.cfg)
                     self.teach_data = list(self.cfg["teach_deployments"])
                     self._render_teach_table()
@@ -2460,6 +2806,17 @@ class MainWindow(QMainWindow):
             self._refresh_branch_name_history()
             
             self.log(f"已更新分支 [{branch_name}] 的配置并同步至部署列表", self.LOG_COLORS["ok"])
+
+    @staticmethod
+    def _format_chanye_detail(note: str) -> str:
+        parts = []
+        if "产业（教学）" in note:
+            parts.append("✔ 产业（教学）")
+        products = [name for name in BranchConfigDialog.EDU_PRODUCT_LINES if name in note]
+        if products:
+            parts.append("✔ 教育产品线：")
+            parts.extend([f"    • {name}" for name in products])
+        return "已选择模块：\n\n" + "\n".join(parts) if parts else "未保存产业/教育产品线配置"
 
     @staticmethod
     def _format_shixun_detail(note: str) -> str:
@@ -2559,12 +2916,14 @@ class MainWindow(QMainWindow):
             return
 
         def fetch():
+            fetch_result = git_ops.run_git(repo, "fetch", "--all", "--prune", timeout=300)
             local = git_ops.local_branches(repo)
             remote = git_ops.remote_branches(repo)
-            return local, remote
+            return fetch_result, local, remote
 
         def done(result):
-            (r, branches, current), (rr, remotes) = result
+            fetch_result, (r, branches, current), (rr, remotes) = result
+            self.log_result(fetch_result)
             self.log_result(r)
             if not r.ok:
                 return
@@ -2576,7 +2935,16 @@ class MainWindow(QMainWindow):
             self.log(f"共 {len(branches)} 个本地分支，当前分支：{current or '(未知)'}")
             # 远端分支
             self.remote_list.clear()
-            self.remote_list.addItems(remotes)
+            local_branch_set = set(branches)
+            for remote_branch in remotes:
+                item = QListWidgetItem(remote_branch)
+                item.setData(Qt.UserRole, remote_branch)
+                local_name = self._local_name_from_remote(remote_branch)
+                if local_name in local_branch_set:
+                    item.setText(f"{remote_branch}    [本地已存在]")
+                    item.setToolTip(f"{remote_branch}\n本地已存在同名分支：{local_name}")
+                    item.setForeground(QColor("#8bc34a"))
+                self.remote_list.addItem(item)
             self.toggle_remote_btn.setText(f"远端分支（{len(remotes)}）")
             self.log(f"共 {len(remotes)} 个远端分支")
 
@@ -2585,6 +2953,95 @@ class MainWindow(QMainWindow):
     def _toggle_remote_panel(self, checked: bool):
         self.remote_list.setVisible(checked)
         self.toggle_remote_btn.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+
+    def _remote_branch_menu(self, pos):
+        item = self.remote_list.itemAt(pos)
+        if not item:
+            return
+        self.remote_list.setCurrentItem(item)
+        remote_branch = item.data(Qt.UserRole) or item.text().strip()
+        menu = QMenu(self)
+        act_pull = menu.addAction(f"拉取此分支到本地：{remote_branch}")
+        action = menu.exec_(self.remote_list.mapToGlobal(pos))
+        if action == act_pull:
+            self.checkout_remote_branch()
+
+    @staticmethod
+    def _local_name_from_remote(remote_branch: str) -> str:
+        remote_branch = (remote_branch or "").strip()
+        if "/" not in remote_branch:
+            return remote_branch
+        return remote_branch.split("/", 1)[1]
+
+    def checkout_remote_branch(self):
+        repo = self.require_project()
+        if not repo:
+            return
+
+        item = self.remote_list.currentItem()
+        remote_branch = (item.data(Qt.UserRole) or item.text()).strip() if item else ""
+        if not remote_branch:
+            QMessageBox.warning(self, "提示", "请先在远端分支列表中选择一个分支")
+            return
+        if "->" in remote_branch:
+            QMessageBox.warning(self, "提示", "请选择具体远端分支，不要选择 HEAD 指针")
+            return
+
+        local_branch = self._local_name_from_remote(remote_branch)
+        if not local_branch:
+            QMessageBox.warning(self, "提示", f"无法识别远端分支名称：{remote_branch}")
+            return
+        if "/" not in remote_branch:
+            QMessageBox.warning(self, "提示", f"远端分支格式不正确：{remote_branch}")
+            return
+
+        def check_and_checkout_remote():
+            r, files = git_ops.dirty_files(repo)
+            if not r.ok:
+                return ("error", r, None)
+            if files:
+                return ("dirty", r, files)
+
+            local_r, local_branches, _ = git_ops.local_branches(repo)
+            if not local_r.ok:
+                return ("error", local_r, None)
+
+            if local_branch in local_branches:
+                cr = git_ops.run_git(repo, "checkout", local_branch)
+                return ("done", cr, local_branch)
+
+            remote_name, _ = remote_branch.split("/", 1)
+            fr = git_ops.run_git(repo, "fetch", remote_name, "--prune", timeout=300)
+            if not fr.ok:
+                return ("error", fr, None)
+
+            cr = git_ops.run_git(repo, "checkout", "--track", "-b", local_branch, remote_branch)
+            return ("done", cr, local_branch)
+
+        def done(result):
+            kind, r, checked_out_branch = result
+            if kind == "error":
+                self.log_result(r)
+            elif kind == "dirty":
+                files = checked_out_branch
+                self.log(f"拉取远端分支被阻止：存在 {len(files)} 个未提交修改", self.LOG_COLORS["err"])
+                QMessageBox.warning(
+                    self, "有未提交代码",
+                    "当前分支存在未提交的修改，请先 commit 或处理后再拉取远端分支：\n\n"
+                    + "\n".join(files[:30]) + ("\n…" if len(files) > 30 else ""),
+                )
+            else:
+                self.log_result(r)
+                if r.ok:
+                    self.cur_branch_label.setText(f"当前分支：{checked_out_branch}")
+                    if self.branch_combo.findText(checked_out_branch) < 0:
+                        self.branch_combo.addItem(checked_out_branch)
+                    self.branch_combo.setCurrentText(checked_out_branch)
+                    self.log_divider(f"{self.selected_project()} @ {checked_out_branch}")
+                    self.log(f"已从远端分支 {remote_branch} 拉取并切换到本地分支：{checked_out_branch}", self.LOG_COLORS["ok"])
+                    self.fetch_branches()
+
+        self.run_async(check_and_checkout_remote, done, busy_msg="正在拉取远端分支…")
 
     def checkout_branch(self):
         repo = self.require_project()
@@ -2957,6 +3414,48 @@ class MainWindow(QMainWindow):
                 return parts[0]
         return branch_name
 
+    def _find_teach_deployment(self, branch_name: str = "", school_name: str = ""):
+        deployments = self.cfg.get("teach_deployments", [])
+        if branch_name:
+            for item in deployments:
+                if item.get("branch_name") == branch_name:
+                    return item
+        if school_name:
+            for item in deployments:
+                if item.get("school") == school_name:
+                    return item
+        return None
+
+    def _upsert_teach_deployment_for_branch(self, branch_name: str, new_item: dict) -> str:
+        deployments = self.cfg.setdefault("teach_deployments", [])
+        new_item["branch_name"] = branch_name
+        existing = None
+        kept = []
+        for item in deployments:
+            if item.get("branch_name") == branch_name:
+                if existing is None:
+                    existing = item
+                continue
+            kept.append(item)
+
+        if existing is not None:
+            old_image_paths = existing.get("image_paths", [])
+            old_image_path = existing.get("image_path", "")
+            existing.update(new_item)
+            if old_image_paths:
+                existing["image_paths"] = old_image_paths
+                existing["image_path"] = old_image_paths[0]
+            elif old_image_path:
+                existing["image_path"] = old_image_path
+                existing["image_paths"] = [old_image_path]
+            kept.insert(0, existing)
+            self.cfg["teach_deployments"] = kept
+            return "updated"
+
+        kept.insert(0, new_item)
+        self.cfg["teach_deployments"] = kept
+        return "created"
+
     def create_branch(self):
         repo = self.require_project()
         if not repo:
@@ -3032,11 +3531,13 @@ class MainWindow(QMainWindow):
                         
                     new_item = {
                         "school": school_name,
+                        "branch_name": name,
                         "version": "新版",
                         "config_note": note,
                         "ip": "",
                         "date": current_date,
                         "image_path": "",
+                        "image_paths": [],
                         "remark": "暂无",
                         "base": base_school
                     }
@@ -3044,11 +3545,14 @@ class MainWindow(QMainWindow):
                     if pre_ip:
                         new_item["ip"] = pre_ip
                     
-                    self.cfg["teach_deployments"].insert(0, new_item)
+                    upsert_result = self._upsert_teach_deployment_for_branch(name, new_item)
                     cfg_mod.save_config(self.cfg)
                     self.teach_data = list(self.cfg["teach_deployments"])
                     self._render_teach_table()
-                    self.log(f"已自动在教学部署列表中新建记录：[{school_name}]", self.LOG_COLORS["ok"])
+                    if upsert_result == "updated":
+                        self.log(f"已更新教学部署列表中同名分支记录：[{name}]", self.LOG_COLORS["ok"])
+                    else:
+                        self.log(f"已自动在教学部署列表中新建记录：[{school_name}]", self.LOG_COLORS["ok"])
                         
                     self.fetch_branches()
 
@@ -3069,6 +3573,45 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "请填写新IP")
             return None
         return repo, old_ip, new_ip
+
+    def select_logo_file(self):
+        if not self._is_old_education_project():
+            QMessageBox.warning(self, "不可用", "上传Logo仅适用于教育旧项目。")
+            return
+        logo_path, _ = QFileDialog.getOpenFileName(
+            self, "选择学校 Logo 图片", "", "图片文件 (*.png *.jpg *.jpeg)"
+        )
+        if not logo_path:
+            return
+        self.logo_file_path = logo_path
+        name = os.path.basename(logo_path)
+        self.logo_file_label.setText(name if len(name) <= 16 else name[:13] + "...")
+        self.logo_file_label.setToolTip(logo_path)
+        self.preview_logo_btn.setEnabled(True)
+        self.clear_logo_btn.setEnabled(True)
+        self.log(f"已选择 Logo：{logo_path}", self.LOG_COLORS["hint"])
+
+    def preview_logo_file(self):
+        logo_path = getattr(self, "logo_file_path", "")
+        if not logo_path:
+            QMessageBox.information(self, "提示", "请先上传 Logo")
+            return
+        if not os.path.exists(logo_path):
+            QMessageBox.warning(self, "Logo 不存在", f"已选择的 Logo 文件不存在：\n{logo_path}")
+            self.clear_logo_file()
+            return
+        dlg = ImagePreviewDialog(logo_path, self)
+        dlg.exec_()
+
+    def clear_logo_file(self):
+        self.logo_file_path = ""
+        if hasattr(self, "logo_file_label"):
+            self.logo_file_label.setText("未上传")
+            self.logo_file_label.setToolTip("未上传 Logo 时不会替换 Logo")
+        if hasattr(self, "preview_logo_btn"):
+            self.preview_logo_btn.setEnabled(False)
+        if hasattr(self, "clear_logo_btn"):
+            self.clear_logo_btn.setEnabled(False)
 
     def preview_ip(self):
         params = self._ip_inputs()
@@ -3097,50 +3640,216 @@ class MainWindow(QMainWindow):
         repo, old_ip, new_ip = params
         branch = self.current_branch_text() or "(未知)"
         project = self.selected_project()
+        logo_payload = None
+        logo_path = self.logo_file_path.strip()
+        if logo_path:
+            if not os.path.exists(logo_path):
+                QMessageBox.warning(self, "Logo 不存在", f"已选择的 Logo 文件不存在：\n{logo_path}")
+                return
+            if not self._is_old_education_project(project):
+                QMessageBox.warning(self, "不可用", "Logo 替换仅适用于教育旧项目。")
+                return
+            logo_payload, logo_err = self._prepare_logo_replacement(repo, logo_path)
+            if logo_err:
+                QMessageBox.warning(self, "Logo 准备失败", logo_err)
+                return
+
+        logo_line = ""
+        if logo_payload:
+            logo_line = (
+                f"\n\n同时替换 Logo：\n"
+                f"  {os.path.basename(logo_path)} → {logo_payload['rel_target']}\n"
+                f"  Home.vue 引用 → {logo_payload['new_ref_path']}"
+            )
         if QMessageBox.question(
             self, "确认替换",
             f"项目：{project}\n分支：{branch}\n\n将该项目中所有\n\n  {old_ip}  →  {new_ip}\n\n"
-            "建议先点「预览匹配」确认范围。确定执行吗？",
+            f"建议先点「预览匹配」确认范围。{logo_line}\n\n确定执行吗？",
         ) != QMessageBox.Yes:
             return
         self.log(f"开始替换 [{old_ip}] → [{new_ip}] …", self.LOG_COLORS["cmd"])
+        if logo_payload:
+            self.log(f"已加入 Logo 替换：{logo_payload['rel_target']}", self.LOG_COLORS["cmd"])
 
-        def done(results):
+        def replace_all():
+            ip_results = ip_replace.replace_ip(repo, old_ip, new_ip)
+            logo_result = self._apply_logo_replacement(logo_payload) if logo_payload else None
+            return ip_results, logo_result
+
+        def done(result):
+            results, logo_result = result
+            file_count = 0
+            total = 0
             if not results:
                 self.log("没有文件需要替换")
-                return
-            total = 0
-            for rel, count in results:
-                if isinstance(count, int):
-                    total += count
-                    self.log(f"{rel}: 替换 {count} 处")
-                else:
-                    self.log(f"{rel}: {count}", self.LOG_COLORS["err"])
-            file_count = len(results)
-            self.log(f"替换完成：{file_count} 个文件，共 {total} 处", self.LOG_COLORS["ok"])
-            # 记录历史并持久化
-            cfg_mod.add_ip_history(self.cfg, project, branch, old_ip, new_ip, file_count)
-            cfg_mod.save_config(self.cfg)
-            self._refresh_old_ip_options(project)
-            
-            # 检测是否是在新分支（以 eduLocal- 开头）下进行的 IP 替换，若是则自动同步更新教学部署列表中对应学校的 IP 地址
-            if branch.startswith("eduLocal-"):
-                school_name = self._extract_school_name(branch)
-                updated = False
-                for item in self.cfg.get("teach_deployments", []):
-                    if item.get("school") == school_name:
-                        item["ip"] = new_ip
-                        updated = True
-                        break
-                if updated:
-                    cfg_mod.save_config(self.cfg)
-                    self.teach_data = list(self.cfg["teach_deployments"])
-                    self._render_teach_table()
-                    self.log(f"检测到在新分支下执行IP替换，已自动将教学部署列表中 [{school_name}] 的 IP 地址更新为：{new_ip}", self.LOG_COLORS["ok"])
-            
-            QMessageBox.information(self, "完成", f"已替换 {file_count} 个文件、{total} 处。\n可用 status/commit 查看并提交。")
+            else:
+                for rel, count in results:
+                    if isinstance(count, int):
+                        total += count
+                        self.log(f"{rel}: 替换 {count} 处")
+                    else:
+                        self.log(f"{rel}: {count}", self.LOG_COLORS["err"])
+                file_count = len(results)
+                self.log(f"IP 替换完成：{file_count} 个文件，共 {total} 处", self.LOG_COLORS["ok"])
+                cfg_mod.add_ip_history(self.cfg, project, branch, old_ip, new_ip, file_count)
+                cfg_mod.save_config(self.cfg)
+                self._refresh_old_ip_options(project)
 
-        self.run_async(ip_replace.replace_ip, done, repo, old_ip, new_ip, busy_msg="正在替换…")
+                # 检测是否是在新分支（以 eduLocal- 开头）下进行的 IP 替换，若是则自动同步更新教学部署列表中对应学校的 IP 地址
+                if branch.startswith("eduLocal-"):
+                    school_name = self._extract_school_name(branch)
+                    target_item = self._find_teach_deployment(branch, school_name)
+                    if target_item:
+                        target_item["branch_name"] = branch
+                        target_item["ip"] = new_ip
+                        cfg_mod.save_config(self.cfg)
+                        self.teach_data = list(self.cfg["teach_deployments"])
+                        self._render_teach_table()
+                        self.log(f"检测到在新分支下执行IP替换，已自动将教学部署列表中 [{school_name}] 的 IP 地址更新为：{new_ip}", self.LOG_COLORS["ok"])
+
+            logo_msg = ""
+            if logo_result:
+                rel, home_rel, err = logo_result
+                if err:
+                    self.log(f"Logo 替换失败：{rel} - {err}", self.LOG_COLORS["err"])
+                    logo_msg = f"\nLogo 替换失败：{err}"
+                else:
+                    self.log(f"Logo 已替换：{rel}", self.LOG_COLORS["ok"])
+                    self.log(f"Home.vue 已同步更新：{home_rel}", self.LOG_COLORS["ok"])
+                    logo_msg = f"\nLogo 已替换：{rel}"
+                    self.clear_logo_file()
+
+            QMessageBox.information(
+                self,
+                "完成",
+                f"IP 替换：{file_count} 个文件、{total} 处。{logo_msg}\n可用 status/commit 查看并提交。"
+            )
+
+        self.run_async(replace_all, done, busy_msg="正在一键替换…")
+
+    def _resolve_login_logo_target(self, repo: str):
+        import re
+
+        home_vue = os.path.join(repo, "src", "views", "Home.vue")
+        if not os.path.exists(home_vue):
+            return None, "未找到 src/views/Home.vue"
+
+        try:
+            with open(home_vue, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except OSError as e:
+            return None, f"读取 src/views/Home.vue 失败：{e}"
+
+        match = re.search(
+            r"(?P<path>(?:@/|/|\.{1,2}/)?(?:src/)?images/loginLogo\.(?P<ext>png|jpe?g))",
+            content,
+            re.IGNORECASE,
+        )
+        if match:
+            ref_path = match.group("path").replace("\\", "/")
+            if ref_path.startswith("@/"):
+                target = os.path.join(repo, "src", ref_path[2:])
+            elif ref_path.startswith("/"):
+                target = os.path.join(repo, ref_path.lstrip("/"))
+            elif ref_path.startswith("./") or ref_path.startswith("../"):
+                target = os.path.normpath(os.path.join(os.path.dirname(home_vue), ref_path))
+            elif ref_path.startswith("src/"):
+                target = os.path.join(repo, ref_path)
+            else:
+                target = os.path.join(repo, "src", ref_path)
+            return {
+                "home_vue": home_vue,
+                "content": content,
+                "target": target,
+                "ref_path": match.group("path"),
+                "ref_span": match.span("path"),
+            }, ""
+
+        return None, "Home.vue 中未找到 loginLogo.png / loginLogo.jpg / loginLogo.jpeg 引用"
+
+    def _prepare_logo_replacement(self, repo: str, logo_path: str):
+        source_ext = os.path.splitext(logo_path)[1].lower()
+        if source_ext not in (".png", ".jpg", ".jpeg"):
+            return None, "Logo 仅支持 .png / .jpg / .jpeg"
+
+        logo_info, err = self._resolve_login_logo_target(repo)
+        if err:
+            return None, err
+
+        old_target = logo_info["target"]
+        target_dir = os.path.dirname(old_target)
+        target = os.path.join(target_dir, f"loginLogo{source_ext}")
+        ref_path = logo_info["ref_path"]
+        ref_root, _ = os.path.splitext(ref_path)
+        new_ref_path = f"{ref_root}{source_ext}"
+        start, end = logo_info["ref_span"]
+        new_home_content = logo_info["content"][:start] + new_ref_path + logo_info["content"][end:]
+
+        return {
+            "logo_path": logo_path,
+            "target": target,
+            "target_dir": target_dir,
+            "home_vue": logo_info["home_vue"],
+            "new_home_content": new_home_content,
+            "new_ref_path": new_ref_path,
+            "rel_target": os.path.relpath(target, repo),
+            "rel_home": os.path.relpath(logo_info["home_vue"], repo),
+        }, ""
+
+    def _apply_logo_replacement(self, payload: dict):
+        import shutil
+        try:
+            os.makedirs(payload["target_dir"], exist_ok=True)
+            if os.path.abspath(payload["logo_path"]) != os.path.abspath(payload["target"]):
+                shutil.copyfile(payload["logo_path"], payload["target"])
+            with open(payload["home_vue"], "w", encoding="utf-8") as f:
+                f.write(payload["new_home_content"])
+            return payload["rel_target"], payload["rel_home"], ""
+        except Exception as e:
+            return payload.get("rel_target", ""), payload.get("rel_home", ""), str(e)
+
+    def replace_school_logo(self):
+        repo = self.require_project()
+        if not repo:
+            return
+        if not self._is_old_education_project():
+            QMessageBox.warning(self, "不可用", "替换Logo仅适用于教育旧项目。")
+            return
+
+        logo_path, _ = QFileDialog.getOpenFileName(
+            self, "选择学校 Logo 图片", "", "图片文件 (*.png *.jpg *.jpeg)"
+        )
+        if not logo_path:
+            return
+
+        payload, err = self._prepare_logo_replacement(repo, logo_path)
+        if err:
+            QMessageBox.warning(self, "Logo 准备失败", err)
+            return
+
+        if QMessageBox.question(
+            self, "确认替换学校 Logo",
+            f"将使用：\n{logo_path}\n\n"
+            f"复制为：\n{payload['rel_target']}\n\n"
+            f"并同步修改 Home.vue 引用为：\n{payload['new_ref_path']}\n\n确定执行吗？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        ) != QMessageBox.Yes:
+            return
+
+        def replace():
+            return self._apply_logo_replacement(payload)
+
+        def done(result):
+            rel, home_rel, err = result
+            if err:
+                self.log(f"Logo 替换失败：{rel} - {err}", self.LOG_COLORS["err"])
+                QMessageBox.warning(self, "替换失败", f"{rel}\n\n{err}")
+            else:
+                self.log(f"Logo 已替换：{rel}", self.LOG_COLORS["ok"])
+                self.log(f"Home.vue 已同步更新：{home_rel}", self.LOG_COLORS["ok"])
+                QMessageBox.information(self, "完成", f"已替换学校 Logo：\n{rel}\n\n已同步更新：\n{home_rel}")
+
+        self.run_async(replace, done, busy_msg="正在替换学校 Logo…")
 
     def show_ip_history(self):
         """弹窗以表格展示 IP 替换历史。"""

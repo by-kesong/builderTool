@@ -2,7 +2,7 @@ import re
 import sys
 
 def main():
-    tag = sys.argv[1] if len(sys.argv) > 1 else "v1.0.1"
+    tag = sys.argv[1] if len(sys.argv) > 1 else "v1.0.2"
     
     # 去除 tag 的 'refs/tags/' 前缀
     tag = tag.split('/')[-1]
@@ -14,7 +14,7 @@ def main():
         print(f"Failed to read README.md: {e}")
         sys.exit(1)
         
-    # 匹配 "## v1.0.1" 开始的块，直到下一个 "##" 或者文件末尾
+    # 匹配指定版本标题开始的块，直到下一个 "##" 或者文件末尾
     pattern = rf"(##\s+{re.escape(tag)}.*?\n)(.*?)(?=\n##\s+|\Z)"
     match = re.search(pattern, content, re.DOTALL)
     
